@@ -406,11 +406,29 @@ export function registerTools(reg: Reg, deps: ToolDeps): void {
       '下载比赛数据并切分训练/验证集，推断 schema（id 列、标签列、任务类型、切分策略）。产物落在工作目录的 work/<slug>/。',
     parameters: {
       slug: slugParam.slug,
-      force: { type: 'boolean', description: 'Re-download even when data is present.' },
+      // The engine has no `--force`: re-preparing is driven by whether the data
+      // is already there, and an explicit local directory replaces the download
+      // entirely. Advertising `force` here meant every call with it failed with
+      // `unrecognized arguments` — the parameter simply did not exist.
+      local: {
+        type: 'string',
+        description: '用本地目录代替 Kaggle 下载（离线演练 / 已手工下好数据时）。',
+      },
+      validFrac: {
+        type: 'number',
+        description: '验证集比例（默认 0.2）。',
+      },
+      seed: { type: 'number', description: '切分随机种子（默认 42）。' },
     },
     run: async (args) => {
       const argv = ['prepare', String(args.slug ?? '')]
-      if (args.force === true) argv.push('--force')
+      if (typeof args.local === 'string' && args.local.trim()) argv.push('--local', args.local.trim())
+      if (typeof args.validFrac === 'number' && Number.isFinite(args.validFrac)) {
+        argv.push('--valid-frac', String(args.validFrac))
+      }
+      if (typeof args.seed === 'number' && Number.isFinite(args.seed)) {
+        argv.push('--seed', String(Math.round(args.seed)))
+      }
       return invoke(deps, argv)
     },
   })
@@ -644,20 +662,40 @@ export function registerTools(reg: Reg, deps: ToolDeps): void {
   make({
     name: 'kaggle_blend',
     description: '多方案融合：按 OOF 拟合权重、剔除高相关候选。需要已归档节点带 OOF（先用 kaggle_oof 补）。',
-    parameters: { slug: slugParam.slug },
-    run: async (args) => invoke(deps, ['blend', String(args.slug ?? '')], { timeoutMs: 0 })
+    parameters: {
+      slug: slugParam.slug,
+      topK: {
+        type: 'number',
+        description: '参与融合的候选上限（按单模型表现排序取前 k，引擎默认 6）。',
+      },
+    },
+    run: async (args) => {
+      const argv = ['blend', String(args.slug ?? '')]
+      // The engine has accepted --top-k all along; the tool simply never passed
+      // it, so a caller could not widen or narrow the pool without editing code.
+      if (typeof args.topK === 'number' && Number.isFinite(args.topK)) {
+        argv.push('--top-k', String(Math.max(2, Math.round(args.topK))))
+      }
+      return invoke(deps, argv, { timeoutMs: 0 })
+    },
   })
 
   make({
     name: 'kaggle_archive',
-    description: '归档某个迭代节点的产物（代码 + 预测），只增不删，用于复现与回退。',
+    description: '把跑通的迭代节点归档（代码 + 预测），只增不删，用于复现与回退。',
     parameters: {
       slug: slugParam.slug,
-      node: { type: 'string', description: 'Node id from journal.json.' },
+      // The engine archives by walking `gen_*` for nodes that succeeded — it
+      // takes `--backfill`, not `--node`. The old `--node` here made every
+      // archive call with a node id fail with `unrecognized arguments`.
+      backfill: {
+        type: 'boolean',
+        description: '把现有 gen_* 里跑通的节点全部补归档（默认只处理当前 best）。',
+      },
     },
     run: async (args) => {
       const argv = ['archive', String(args.slug ?? '')]
-      if (typeof args.node === 'string' && args.node.trim()) argv.push('--node', args.node.trim())
+      if (args.backfill === true) argv.push('--backfill')
       return invoke(deps, argv)
     },
   })
@@ -682,10 +720,21 @@ export function registerTools(reg: Reg, deps: ToolDeps): void {
     parameters: {
       slug: slugParam.slug,
       folds: { type: 'number', description: 'OOF folds (default 5).' },
+      node: {
+        type: 'string',
+        description: '只补指定节点 id（推荐：不带它会遍历所有归档节点，代价大得多）。',
+      },
+      force: { type: 'boolean', description: '已有 OOF 也重跑。' },
     },
     run: async (args) => {
       const argv = ['oof', String(args.slug ?? '')]
       if (typeof args.folds === 'number' && Number.isFinite(args.folds)) argv.push('--folds', String(Math.round(args.folds)))
+      // `--node` matters more than it looks: without it the engine walks every
+      // archived node, and each one is a full K-fold re-fit. A single-node
+      // refill is the common case, so leaving it unexposed made the cheaper
+      // path unreachable from the tool surface.
+      if (typeof args.node === 'string' && args.node.trim()) argv.push('--node', args.node.trim())
+      if (args.force === true) argv.push('--force')
       return invoke(deps, argv, { timeoutMs: 0 })
     },
   })
