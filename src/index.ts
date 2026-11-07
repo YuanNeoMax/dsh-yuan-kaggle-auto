@@ -83,6 +83,10 @@ export interface HostBridge {
     hint?: string
     not_covered?: string[]
   }>
+  /** Serialises rehearsals against the `kaggle_smoke` tool. */
+  smokeLock(): Promise<() => void>
+  /** The plugin's one lock table; tools acquire through it. */
+  lock: (key: string) => Promise<() => void>
   egoAvailable(): boolean
   jobs: ReturnType<typeof createJobBoard>
 }
@@ -116,7 +120,7 @@ export function apply(ctx: Context, config: Record<string, unknown> = {}): void 
     subprocess: (ctx as unknown as HostServices).subprocess as ToolsSpawn | undefined,
     egoAvailable: bridge.egoAvailable,
     setup: (force?: boolean) => bridge.setup({ force }),
-    acquire: createLock(),
+    acquire: bridge.lock,
   })
 
   const services = ctx as unknown as HostServices
@@ -148,11 +152,17 @@ function createBridge(ctx: HostServices & Context, raw: Settings): HostBridge & 
   const settings = (): Settings => resolveConfig(source())
   const paths = (): ResolvedPaths => resolvePaths(settings())
   const jobs = createJobBoard()
+  // One lock table for the whole plugin. The `kaggle_smoke` tool takes
+  // `smoke`, and the panel's rehearsal must queue behind it rather than run
+  // beside it — two shared maps would defeat that.
+  const lock = createLock()
 
   const bridge: HostBridge & { lastPython?: string } = {
     settings,
     paths,
     jobs,
+    lock,
+    smokeLock: () => lock('smoke'),
     status: async () => {
       const egoTools = (ctx as unknown as { get?(name: string): unknown }).get?.('tools') as
         | { has?(name: string): boolean }
@@ -222,33 +232,44 @@ function createBridge(ctx: HostServices & Context, raw: Settings): HostBridge & 
       // Reuses `runEngine` so the rehearsal travels the same path a real run
       // does (same interpreter, same env contract, same cwd rule). A smoke test
       // that spawns differently from production would prove nothing about it.
-      const found = await findPython(settings(), process.env)
-      if (!found.ok) {
-        return { ok: false, hint: found.reason, steps: [] }
-      }
-      const venv = venvPython(paths().venvDir)
-      const python = existsSync(venv) ? venv : found.candidate.command
-      const run = await runEngine(['smoke'], {
-        python,
-        paths: paths(),
-        settings: settings(),
-        subprocess: (ctx as unknown as HostServices).subprocess as ToolsSpawn | undefined,
-      }, {
-        // The rehearsal trains LightGBM three times over a 1200-row fixture;
-        // measured ~5 s, so ten minutes is a generous ceiling for a slow machine.
-        timeoutMs: 10 * 60 * 1000,
-        onLine: onLine ? (line) => { if (line.text.trim()) onLine(line.text) } : undefined,
-      })
-      const value = run.value
-      if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
-        return value as {
-          ok?: boolean
-          steps?: Array<{ step: string; ok: boolean; seconds?: number; error?: string }>
-          hint?: string
-          not_covered?: string[]
+      //
+      // Locked on the same key the `kaggle_smoke` tool uses. The engine gives
+      // each rehearsal its own `mkdtemp` root, so two concurrent runs cannot
+      // corrupt each other's files — but each one trains LightGBM three times.
+      // A panel click and a model calling the tool at the same moment would
+      // double that cost and tell nobody anything new.
+      const release = await bridge.smokeLock()
+      try {
+        const found = await findPython(settings(), process.env)
+        if (!found.ok) {
+          return { ok: false, hint: found.reason, steps: [] }
         }
+        const venv = venvPython(paths().venvDir)
+        const python = existsSync(venv) ? venv : found.candidate.command
+        const run = await runEngine(['smoke'], {
+          python,
+          paths: paths(),
+          settings: settings(),
+          subprocess: (ctx as unknown as HostServices).subprocess as ToolsSpawn | undefined,
+        }, {
+          // The rehearsal trains LightGBM three times over a 1200-row fixture;
+          // measured ~5 s, so ten minutes is a generous ceiling for a slow machine.
+          timeoutMs: 10 * 60 * 1000,
+          onLine: onLine ? (line) => { if (line.text.trim()) onLine(line.text) } : undefined,
+        })
+        const value = run.value
+        if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+          return value as {
+            ok?: boolean
+            steps?: Array<{ step: string; ok: boolean; seconds?: number; error?: string }>
+            hint?: string
+            not_covered?: string[]
+          }
+        }
+        return { ok: false, hint: run.error ?? 'smoke 未返回可解析结果', steps: [] }
+      } finally {
+        release()
       }
-      return { ok: false, hint: run.error ?? 'smoke 未返回可解析结果', steps: [] }
     },
     egoAvailable: () => {
       const registry = (ctx as unknown as { get?(name: string): unknown }).get?.('tools') as

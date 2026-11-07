@@ -654,19 +654,33 @@ export function registerTools(reg: Reg, deps: ToolDeps): void {
 
   make({
     name: 'kaggle_receipt',
-    description: '读（或刷新）提交回执：这次提交的 public / private 分数、状态与溯源。refresh: true 会重新拉取实时分数。',
+    description:
+      '读（或刷新）提交回执：这次提交的 public / private 分数、状态与溯源。已有回执时秒回；refresh: true 才重新轮询（最长等 waitTimeout 秒）。',
     parameters: {
       slug: slugParam.slug,
       refresh: { type: 'boolean', description: 'Re-poll Kaggle instead of reading the stored receipt.' },
-      waitTimeout: { type: 'number', description: 'Poll ceiling in seconds (default 120).' },
+      // The engine's own default is 900 s, not the 120 s this description used
+      // to claim — a 7.5× understatement that made "wait at most two minutes"
+      // read like a promise. Say the real number, and cap the spawn so a stuck
+      // poll cannot hang the tool call indefinitely.
+      waitTimeout: {
+        type: 'number',
+        description: '重新轮询时的等待上限（秒）。引擎默认 900；设更小的值可快速放弃。',
+      },
     },
     run: async (args) => {
       const argv = ['receipt', String(args.slug ?? '')]
       if (args.refresh === true) argv.push('--refresh')
-      if (typeof args.waitTimeout === 'number' && Number.isFinite(args.waitTimeout)) {
-        argv.push('--wait-timeout', String(Math.round(args.waitTimeout)))
-      }
-      return invoke(deps, argv, { timeoutMs: 0 })
+      const wait = typeof args.waitTimeout === 'number' && Number.isFinite(args.waitTimeout)
+        ? Math.max(10, Math.round(args.waitTimeout))
+        : undefined
+      if (wait !== undefined) argv.push('--wait-timeout', String(wait))
+      // Keep the spawn alive past the engine's own ceiling so the engine owns
+      // the timeout decision (it can still write a receipt for a partially
+      // observed submission). Without a spawn ceiling at all, a stuck HTTP
+      // request inside the poll would pin the tool forever.
+      const ceiling = ((wait ?? 900) + 120) * 1000
+      return invoke(deps, argv, { timeoutMs: ceiling })
     },
   })
 
