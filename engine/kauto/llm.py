@@ -47,6 +47,63 @@ def _env(name: str) -> str | None:
     return v.strip() if v and v.strip() else None
 
 
+def _provider_channel(name: str, model_override: str | None) -> dict | None:
+    """把面板上选的 provider 名字解析成一条通道。
+
+    返回 None 表示"这个名字不认识，调用方应退回 auto"。
+    认识但不可用的通道返回 `ok: False` 并带可操作 hint ——
+    用户显式选了它，就不能悄悄换成别的。
+    """
+    # 名字 → (默认 base, 默认 model, 需要 key 的环境变量名)
+    channels: dict[str, tuple[str, str, str]] = {
+        "deepseek": ("https://api.deepseek.com/v1", "deepseek-chat", "DEEPSEEK_API_KEY"),
+        "openai": ("https://api.openai.com/v1", "gpt-4o-mini", "OPENAI_API_KEY"),
+        "dashscope": ("https://dashscope.aliyuncs.com/compatible-mode/v1",
+                      "qwen2.5-coder-32b-instruct", "DASHSCOPE_API_KEY"),
+        "siliconflow": ("https://api.siliconflow.cn/v1", "Qwen/Qwen2.5-Coder-32B-Instruct",
+                        "SILICONFLOW_API_KEY"),
+        "openrouter": ("https://openrouter.ai/api/v1", "deepseek/deepseek-chat",
+                       "OPENROUTER_API_KEY"),
+    }
+
+    if name == "ofm":
+        fw = ofm_forward()
+        if fw["listening"] and fw["has_key"]:
+            return {"ok": True, "base": fw["base"], "key": fw["key"],
+                    "model": model_override or (ofm_best_model() or PREFERRED_MODEL),
+                    "source": "ofm-forward", "hint": ""}
+        return {"ok": False, "reason": "ofm 通道未监听",
+                "hint": "面板里选了 ofm：需要先在 DSH 里启用 our-free-model 的 forward 监听，"
+                        "或把 LLM 通道改回 auto。"}
+
+    if name == "trae":
+        gw = gateway_available()
+        if gw["listening"] and gw["has_key"]:
+            return {"ok": True, "base": gw["base"], "key": gateway_key(),
+                    "model": model_override or PREFERRED_MODEL,
+                    "source": "trae-via-gateway", "hint": ""}
+        return {"ok": False, "reason": "trae 需要 DSH 渠道包网关",
+                "hint": "trae 通过 DSH 渠道包网关（127.0.0.1:8326）访问；"
+                        "该网关未运行。把通道改回 auto，或直接配 deepseek/openai 的 key。"}
+
+    if name not in channels:
+        # 不认识的取值：退回 auto，但要说明，否则会变成又一个静默失效的配置。
+        return {"ok": False, "reason": f"未知 provider: {name}",
+                "hint": f"不认识的通道名 `{name}`，已退回自动探测。"
+                        f"可用：auto / ofm / trae / {', '.join(sorted(channels))}"}
+
+    base, default_model, key_env = channels[name]
+    key = _env(key_env)
+    if not key:
+        return {"ok": False, "reason": f"{name} 缺少 API key（{key_env} 为空）",
+                "hint": f"面板里选了 {name}，但没有可用的 key。"
+                        f"在设置里填「LLM API Key」，或设置环境变量 {key_env}；"
+                        f"也可以把通道改回 auto 复用宿主已配的凭据。"}
+    return {"ok": True, "base": base, "key": key,
+            "model": model_override or default_model,
+            "source": f"provider:{name}", "hint": ""}
+
+
 def _port_open(url_base: str, timeout: float = 1.5) -> bool:
     try:
         u = urlparse(url_base)
@@ -205,14 +262,26 @@ def resolve(explicit_base: str | None = None, explicit_key: str | None = None,
             explicit_model: str | None = None, prefer: str | None = None) -> dict:
     """返回 {ok, base, key, model, source, hint}。绝不返回明文 key 到日志。
 
-    优先级（本项目的实际形态）：
-      env → channel-pack 网关（TRAE DeepSeek V4.1 Flash）→ our-free-model forward
+    优先级：
+      显式参数 → KAUTO_LLM_* / OPENAI_API_KEY → KAUTO_LLM_PROVIDER 指定的通道
+      → channel-pack 网关（TRAE DeepSeek V4.1 Flash）→ our-free-model forward
       → DSH 外部 provider key → ollama
 
-    为什么渠道包网关排在 forward 之前：8326 那条是 DSH 里**已经在用**的通道，
-    并且 target 模型（trae/deepseek-v4.1-flash）实测可用；forward 是同一个
-    插件提供的另一个可选监听，没启用时不该挡住主路径。
-    prefer="external" 跳过所有 DSH 内网通道，直接用外部 provider。
+    ## `KAUTO_LLM_PROVIDER` 是插件带进来的
+
+    宿主插件面板上让用户选 provider（auto / ofm / deepseek / trae / openai …），
+    并把它作为 `KAUTO_LLM_PROVIDER` 传给引擎。**这个变量此前没有被读取** ——
+    面板上选了 provider 却毫无作用，是个静默失效的配置项。
+
+    语义：
+      · 未设置 / `auto`  → 走完整探测链（保持旧行为）
+      · 已知名字          → 只用该通道；它不通就**明确报错**，
+                            而不是悄悄退回别的通道
+      · 未知名字          → 当作 auto，并在 hint 里说明不认识的取值
+
+    为什么显式选择要"失败即报错"而不是"自动兜底"：用户选了 deepseek，
+    可能正是因为不想用宿主的网关（计费、隐私、限流）。悄悄换通道会让
+    他以为在用 A，实际在用 B。
     """
     base = explicit_base or _env("KAUTO_LLM_BASE")
     key = explicit_key or _env("KAUTO_LLM_KEY") or _env("OPENAI_API_KEY")
@@ -221,6 +290,21 @@ def resolve(explicit_base: str | None = None, explicit_key: str | None = None,
     if base and key:
         return {"ok": True, "base": base.rstrip("/"), "key": key,
                 "model": model or PREFERRED_MODEL, "source": "env", "hint": ""}
+
+    chosen = (_env("KAUTO_LLM_PROVIDER") or "").strip().lower()
+    if chosen and chosen != "auto":
+        pinned = _provider_channel(chosen, model)
+        if pinned is not None:
+            if pinned.get("ok"):
+                return pinned
+            # A known provider that cannot be reached is a hard failure:
+            # the user picked it on purpose (billing, privacy, rate limits),
+            # so silently switching channels would mean they run on something
+            # other than what they asked for.
+            # An UNKNOWN name is different — that falls through to auto below,
+            # because the value carries no intent we could honour.
+            if "未知 provider" not in str(pinned.get("reason", "")):
+                return pinned
 
     if prefer != "external":
         gw = gateway_available()
