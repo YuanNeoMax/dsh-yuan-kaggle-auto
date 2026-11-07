@@ -59,6 +59,13 @@ export interface RouteBridge {
   installEgo(options?: { version?: string }): Promise<InstallOutcome>
   /** Read-only leaderboard probe; returns the engine's JSON verbatim. */
   leaderboard(slug: string, top?: number): Promise<Record<string, unknown>>
+  /** Runs the offline rehearsal; `onLine` receives progress text. */
+  smoke(onLine?: (line: string) => void): Promise<{
+    ok?: boolean
+    steps?: Array<{ step: string; ok: boolean; seconds?: number; error?: string }>
+    hint?: string
+    not_covered?: string[]
+  }>
   egoAvailable(): boolean
   jobs: JobBoard
 }
@@ -241,14 +248,39 @@ export function registerRoutes(
   add(
     SMOKE_ROUTE,
     onlyPost(async (_req, res) => {
+      // A real rehearsal, not a status read.
+      //
+      // The previous version only called `bridge.status()` and printed the same
+      // checklist the panel already shows — the button was named "smoke" but ran
+      // no modelling step, so a user who clicked it still had no evidence the
+      // pipeline works on this machine. The engine's `smoke` command now runs
+      // prepare → baseline → write-sub → validate against a bundled fixture,
+      // which exercises Python, the dependencies, the splitter, LightGBM and the
+      // submission shape without touching Kaggle or spending a quota slot.
       background(
         'smoke',
         async (job) => {
           const status = await bridge.status()
-          job.push(status.ready ? '引擎就绪' : '引擎未就绪：先点「初始化环境」')
-          for (const item of status.items) job.push(`${item.label}: ${item.detail ?? item.level}`)
-          job.push(`工作目录: ${status.paths.workRoot}`)
-          return status.ready
+          if (!status.ready) {
+            job.push('引擎未就绪：先点「初始化环境」')
+            for (const item of status.items) {
+              job.push(`${item.label}: ${item.detail ?? item.level}`)
+              if (item.fix) job.push(`    → ${item.fix}`)
+            }
+            return false
+          }
+          job.push('开始离线演练（prepare → baseline → write-sub → validate）')
+          const result = await bridge.smoke((line) => job.push(line))
+          for (const step of result.steps ?? []) {
+            job.push(`${step.ok ? 'OK  ' : 'FAIL'} ${step.step}  ${step.seconds ?? '?'}s${step.error ? `  ${step.error}` : ''}`)
+          }
+          if (!result.ok && result.hint) job.push(`→ ${result.hint}`)
+          if (result.ok) {
+            job.push('')
+            job.push('管线在本机可用。以下三项需要真凭据，由「体检」与第一次真实提交覆盖：')
+            for (const item of result.not_covered ?? []) job.push(`  · ${item}`)
+          }
+          return Boolean(result.ok)
         },
         res,
       )

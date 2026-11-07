@@ -120,6 +120,7 @@ PROBE = [
     "test_docs_sync.py",
     "test_iterate_mock_llm.py",
     "test_workdir_relocation.py",
+    "test_smoke_command.py",
 ]
 
 # 只把这些当作真失败信号。
@@ -184,6 +185,7 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
 
 
 

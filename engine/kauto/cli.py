@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+import time
 from pathlib import Path
 
 from . import iter as kiter
@@ -401,6 +403,158 @@ def cmd_leaderboard(args) -> int:
     print()
     _p(lb)
     return 0
+
+
+def cmd_smoke(args) -> int:
+    """用内置夹具离线跑通整条链路。
+
+    ## 为什么需要它
+
+    插件面板上的「跑冒烟」此前只调体检（`read_status`）—— 名字叫冒烟，
+    实际一个建模步骤都没跑。用户点完看到一屏绿灯，仍然不知道这条流水线
+    在这台机器上到底能不能跑。
+
+    而真跑一场 Kaggle 比赛的代价很大：要联网下载、要训练、**提交还要花配额**。
+    所以"验证能不能跑"和"真的去比赛"必须分开。
+
+    这个命令用包内夹具（`fixtures/demo-comp`）把
+    prepare → baseline → write-sub → validate 跑一遍：
+    真实读 csv、真实训练 LightGBM、真实写 submission、真实跑形状校验。
+    全程不联网、不碰 Kaggle、不消耗任何配额。
+
+    ## 它验证什么、不验证什么
+
+    验证：Python 环境、依赖、引擎能否导入、数据能否切分、模型能否训练、
+    提交文件能否生成并通过形状校验 —— 也就是"这条管线通不通"。
+
+    不验证：Kaggle 凭据是否有效、上传通道是否可用、比赛规则是否接受。
+    那几项需要真凭据，由 `doctor` 与第一次真实 `submit` 覆盖。
+
+    这三者的分工是有意的：把需要网络与凭据的检查留在 doctor，
+    把纯本地的可跑性检查放在这里，互不拖累。
+    """
+    import shutil
+    import tempfile
+
+    slug = "smoke-comp"
+    # 夹具在**包内**（`engine/fixtures/`），不随可写根移动。
+    # 这里必须按模块位置定位，不能用 `kapi.ROOT` —— 后者跟随 KAUTO_ROOT，
+    # 宿主插件与测试都会把它指到别处，于是"找夹具"会跑去用户的临时目录里找。
+    # （实测踩到：设了 KAUTO_ROOT 后 smoke 一律报"找不到夹具"。）
+    package_root = Path(__file__).resolve().parent.parent
+    if args.local:
+        fixture = Path(args.local)
+    else:
+        fixture = package_root / "fixtures" / "demo-comp"
+    if not (fixture / "train.csv").exists():
+        print(f"[kauto] 找不到夹具：{fixture}")
+        alt = package_root / "fixtures"
+        if alt.is_dir():
+            names = sorted(p.name for p in alt.iterdir() if p.is_dir())
+            if names:
+                print(f"[kauto] 包内可用夹具：{', '.join(names)}")
+        print("[kauto] 用 --local <目录> 指定一个含 train.csv / test.csv 的目录。")
+        return 2
+
+    steps: list[dict] = []
+    started = time.time()
+
+    def step(name: str, fn) -> bool:
+        print(f"\n=== {name} ===", flush=True)
+        t = time.time()
+        try:
+            fn()
+            steps.append({"step": name, "ok": True, "seconds": round(time.time() - t, 1)})
+            return True
+        except Exception as e:
+            steps.append({"step": name, "ok": False,
+                          "seconds": round(time.time() - t, 1),
+                          "error": f"{type(e).__name__}: {e}"[:400]})
+            print(f"[kauto] {name} 失败：{e}", file=sys.stderr)
+            return False
+
+    # 用临时可写根：演练产物不该落在用户真实工作区里。
+    tmp_root = Path(tempfile.mkdtemp(prefix="kauto-smoke-"))
+    old_root = os.environ.get("KAUTO_ROOT")
+    ok = False
+    try:
+        # kapi.ROOT 是模块级常量，在 import 时求值 —— 想让临时根生效，
+        # 必须重载相关模块。这是全项目唯一一处"必须在运行期改根"的场景，
+        # 别的路径都由宿主在 import 前注入环境变量。
+        os.environ["KAUTO_ROOT"] = str(tmp_root)
+        for mod in [m for m in list(sys.modules) if m == "kauto" or m.startswith("kauto.")]:
+            sys.modules.pop(mod, None)
+        import importlib
+        kapi_l = importlib.import_module("kauto.kapi")
+        prep_l = importlib.import_module("kauto.prep")
+        model_l = importlib.import_module("kauto.model")
+
+        print(f"[kauto] 演练根目录：{kapi_l.ROOT}")
+        print(f"[kauto] 夹具：{fixture}")
+
+        if not step("prepare", lambda: prep_l.prepare(
+                slug, local_dir=str(fixture), use_skill=False)):
+            return _smoke_report(steps, started, 1)
+        if not step("baseline", lambda: model_l.run_baseline(slug, folds=3, seed=42)):
+            return _smoke_report(steps, started, 1)
+        if not step("write-sub", lambda: model_l.write_submission(slug)):
+            return _smoke_report(steps, started, 1)
+
+        work = kapi_l.WORK_DIR / slug
+        sub_p = work / "submission.csv"
+        sample_p = work / "sample_submission.csv"
+
+        def _validate():
+            import pandas as pd
+            from . import subcheck as _sc
+            if not sub_p.exists():
+                raise RuntimeError(f"没有生成 {sub_p}")
+            out = pd.read_csv(sub_p, low_memory=False)
+            sample = pd.read_csv(sample_p, low_memory=False) if sample_p.exists() else None
+            test = pd.read_csv(work / "test.csv", low_memory=False)
+            meta = prep_l.load_work(slug)
+            return _sc.check(out, sample, meta.get("id_col") or "", test)
+
+        if not step("validate", _validate):
+            return _smoke_report(steps, started, 1)
+
+        ok = True
+        return _smoke_report(steps, started, 0)
+    finally:
+        if old_root is None:
+            os.environ.pop("KAUTO_ROOT", None)
+        else:
+            os.environ["KAUTO_ROOT"] = old_root
+        if getattr(args, "keep", False):
+            print(f"\n[kauto] 保留演练产物：{tmp_root}")
+        else:
+            shutil.rmtree(tmp_root, ignore_errors=True)
+        # 把模块恢复成原根的版本，避免后续调用读到临时根
+        for mod in [m for m in list(sys.modules) if m == "kauto" or m.startswith("kauto.")]:
+            sys.modules.pop(mod, None)
+
+
+def _smoke_report(steps: list[dict], started: float, code: int) -> int:
+    total = round(time.time() - started, 1)
+    payload = {
+        "ok": code == 0,
+        "kind": "offline-smoke",
+        "seconds": total,
+        "steps": steps,
+        "note": ("离线演练：真实读数据、真实训练、真实写提交、真实形状校验；"
+                 "不联网、不提交、不消耗 Kaggle 配额。"),
+        "not_covered": ["Kaggle 凭据有效性", "上传通道可达性", "比赛规则是否接受"],
+    }
+    if code != 0:
+        failed = [s["step"] for s in steps if not s["ok"]]
+        payload["failed"] = failed
+        payload["hint"] = (
+            "prepare 失败 → 夹具目录不对或数据列异常；"
+            "baseline 失败 → 依赖或数据量问题；"
+            "write-sub 失败 → 模型产物与特征集不一致；"
+            "validate 失败 → 提交文件形状不对。")
+    _p(payload)
+    return code
 
 
 def cmd_status(args) -> int:
@@ -961,6 +1115,13 @@ def build_parser() -> argparse.ArgumentParser:
                    help="页面名（默认 evaluation；也可 rules / data-description）")
     p.add_argument("--format", choices=("text", "json"), default="json")
     p.set_defaults(fn=cmd_rules)
+
+    p = sub.add_parser("smoke", help="用内置夹具离线跑通整条链路（不碰 Kaggle 配额）")
+    p.add_argument("--local", default=None,
+                   help="夹具目录（默认用包内 fixtures/demo-comp）")
+    p.add_argument("--keep", action="store_true",
+                   help="保留演练产物（默认跑完删除）")
+    p.set_defaults(fn=cmd_smoke)
 
     p = sub.add_parser("status", help="自己的排名/剩余提交次数（需凭据）")
     p.add_argument("slug")

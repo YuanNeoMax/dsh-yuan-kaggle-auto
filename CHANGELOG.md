@@ -2,6 +2,25 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/)；版本语义遵循 [SemVer](https://semver.org/)。
 
+## [Unreleased]
+
+### 新增
+
+- **kauto smoke / kaggle_smoke / 面板「跑通演练」**：用包内夹具真跑一遍
+  prepare → baseline → write-sub → validate。真实读 csv、真实训练 LightGBM、
+  真实写 submission、真实跑形状校验，**不联网、不提交、不消耗 Kaggle 配额**。
+  报告明确列出未覆盖的三项（凭据有效性 / 上传通道可达性 / 规则是否接受），
+  避免一次全绿被误读成"连 Kaggle 都通了"。
+
+  此前面板上那个「跑冒烟」按钮只调体检函数 —— 名字叫冒烟，一个建模步骤都没跑。
+
+### 修复
+
+- **smoke 找不到包内夹具**：夹具在 \ngine/fixtures/\，属包内只读资源，
+  不随可写根移动。首版用 \kapi.ROOT\ 定位，而宿主与测试都会把
+  \KAUTO_ROOT\ 指到别处，于是"找夹具"跑去临时目录里找、一律报缺失。
+  改为按模块位置定位，并在失败时列出包内可用夹具。
+
 ## [0.2.0] - 2026-11-08
 
 ### 新增
@@ -84,4 +103,5 @@
 
 - TypeScript：43 项（配置容错、提交门、输出解析、作业板、路由守卫、安装规格）。
 - Python：66 项全绿（其中 4 项因插件包不带用户工作区产物而正确 SKIP）。
+
 

@@ -366,9 +366,19 @@ function Section({ ctx }: { ctx: ClientContext }): React.ReactElement {
             busy={busy === 'install-skill'}
             disabled={Boolean(busy)}
           />
+          <SecondaryButton
+            label="跑通演练"
+            onClick={() => void runJob('smoke', '/api/yuan-kaggle/smoke')}
+            busy={busy === 'smoke'}
+            disabled={Boolean(busy)}
+          />
         </div>
         <p className="text-muted text-sm mt-2">
           初始化会创建独立 venv 并安装 pandas / numpy / scikit-learn / lightgbm / kaggle，只需一次。之后命中标记即秒回。
+        </p>
+        <p className="text-muted text-sm mt-1">
+          「跑通演练」用内置夹具真跑一遍 prepare→baseline→write-sub→validate，
+          不联网、不提交、不消耗配额。第一次用之前先跑它，能确认这条管线在本机确实通。
         </p>
       </section>
 

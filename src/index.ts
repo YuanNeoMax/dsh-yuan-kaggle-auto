@@ -76,6 +76,13 @@ export interface HostBridge {
   installEgo(options?: { version?: string }): Promise<InstallOutcome>
   /** Read-only leaderboard probe for the panel; resolves the engine's JSON. */
   leaderboard(slug: string, top?: number): Promise<Record<string, unknown>>
+  /** Offline rehearsal: real pipeline against a bundled fixture, no quota spent. */
+  smoke(onLine?: (line: string) => void): Promise<{
+    ok?: boolean
+    steps?: Array<{ step: string; ok: boolean; seconds?: number; error?: string }>
+    hint?: string
+    not_covered?: string[]
+  }>
   egoAvailable(): boolean
   jobs: ReturnType<typeof createJobBoard>
 }
@@ -210,6 +217,38 @@ function createBridge(ctx: HostServices & Context, raw: Settings): HostBridge & 
         stdout: run.stdout.trim().slice(-1200) || undefined,
         stderr: run.stderr.trim().slice(-800) || undefined,
       }
+    },
+    smoke: async (onLine?: (line: string) => void) => {
+      // Reuses `runEngine` so the rehearsal travels the same path a real run
+      // does (same interpreter, same env contract, same cwd rule). A smoke test
+      // that spawns differently from production would prove nothing about it.
+      const found = await findPython(settings(), process.env)
+      if (!found.ok) {
+        return { ok: false, hint: found.reason, steps: [] }
+      }
+      const venv = venvPython(paths().venvDir)
+      const python = existsSync(venv) ? venv : found.candidate.command
+      const run = await runEngine(['smoke'], {
+        python,
+        paths: paths(),
+        settings: settings(),
+        subprocess: (ctx as unknown as HostServices).subprocess as ToolsSpawn | undefined,
+      }, {
+        // The rehearsal trains LightGBM three times over a 1200-row fixture;
+        // measured ~5 s, so ten minutes is a generous ceiling for a slow machine.
+        timeoutMs: 10 * 60 * 1000,
+        onLine: onLine ? (line) => { if (line.text.trim()) onLine(line.text) } : undefined,
+      })
+      const value = run.value
+      if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+        return value as {
+          ok?: boolean
+          steps?: Array<{ step: string; ok: boolean; seconds?: number; error?: string }>
+          hint?: string
+          not_covered?: string[]
+        }
+      }
+      return { ok: false, hint: run.error ?? 'smoke 未返回可解析结果', steps: [] }
     },
     egoAvailable: () => {
       const registry = (ctx as unknown as { get?(name: string): unknown }).get?.('tools') as

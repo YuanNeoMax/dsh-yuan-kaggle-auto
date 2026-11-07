@@ -52,7 +52,8 @@ dsh plugin --profile <profile> add dsh-yuan-kaggle-auto@latest
 
 ```
 1. 设置页 → 点「初始化环境」           （一次，约数分钟）
-2. 设置页 → 点「体检」                 （确认凭据 / CLI / LLM / ego 状态）
+2. 设置页 → 点「跑通演练」             （真跑一遍管线，不碰配额；约 5 秒）
+   设置页 → 点「体检」                 （确认凭据 / CLI / LLM / ego 状态）
 3. 对 AI 说：帮我打 titanic，跑两轮迭代，先别提交
 ```
 
@@ -68,6 +69,7 @@ AI 内部会调 `kaggle_run`，它按
 | `kaggle_help` | 流水线索引：六阶段、最短路径、故障排查 |
 | `kaggle_doctor` | 环境体检，逐项状态与修复建议 |
 | `kaggle_setup` | 初始化引擎环境（幂等） |
+| `kaggle_smoke` | 离线演练：真跑 prepare→baseline→write-sub→validate，不联网不消耗配额 |
 | `kaggle_connect` | 检查 Kaggle 凭据与 LLM 通道（只读，不改凭据） |
 | `kaggle_list` | 列可参赛比赛 |
 | `kaggle_info` | 官方指标、每日限额、是否 notebook-only |
@@ -206,3 +208,5 @@ Windows 下为社区移植，属实验性支持。
 
 Kaggle 是 Kaggle Inc. 的商标；本插件由社区维护，与 Kaggle 无隶属关系。
 使用本插件进行比赛时，请遵守各比赛自身的规则与 Kaggle 的服务条款。
+
+

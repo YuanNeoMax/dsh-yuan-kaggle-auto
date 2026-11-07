@@ -311,6 +311,23 @@ export function registerTools(reg: Reg, deps: ToolDeps): void {
   })
 
   make({
+    name: 'kaggle_smoke',
+    description:
+      '离线演练：用内置夹具真实跑一遍 prepare→baseline→write-sub→validate。不联网、不提交、不消耗 Kaggle 配额。第一次用之前先跑它，确认这条管线在这台机器上确实通。',
+    parameters: {
+      keep: { type: 'boolean', description: '保留演练产物（默认跑完删除）。' },
+    },
+    run: async (args) => {
+      const argv = ['smoke']
+      if (args.keep === true) argv.push('--keep')
+      // A dedicated lock key: smoke uses a temp root, so it must not queue
+      // behind a long real run on some other slug, but two smokes at once
+      // would still fight over the same temp-dir naming.
+      return invoke(deps, argv, { lock: 'smoke', timeoutMs: 15 * 60 * 1000 })
+    },
+  })
+
+  make({
     name: 'kaggle_connect',
     description:
       '检查/说明如何接入 Kaggle 与 LLM。kaggle 侧只读探测凭据；llm 侧探测可用通道。不改动任何凭据。',
@@ -745,7 +762,7 @@ export function helpPayload(topic: string): ToolResult {
     ok: true,
     topic: 'tools',
     core: [
-      'kaggle_doctor / kaggle_setup / kaggle_connect',
+      'kaggle_doctor / kaggle_setup / kaggle_smoke / kaggle_connect',
       'kaggle_list / kaggle_info / kaggle_status / kaggle_leaderboard',
       'kaggle_prepare / kaggle_baseline / kaggle_iterate',
       'kaggle_write_sub / kaggle_rules / kaggle_validate / kaggle_submit / kaggle_receipt',
@@ -787,3 +804,4 @@ export function helpPayload(topic: string): ToolResult {
 export function enginePresent(engineDir: string): boolean {
   return existsSync(join(engineDir, 'kauto', 'cli.py'))
 }
+
