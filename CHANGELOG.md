@@ -26,6 +26,38 @@
   10 次的模型，会基于它从未收集过的证据下结论。现在返回 `rounds.requested` /
   `rounds.effective` 与一句点名两个数字的 `roundsNote`，并说明怎么调高上限。
   新增 `planRounds()` 统一处理（`run` 允许 0 轮 = 只跑基线，`iterate` 最小 1 轮）。
+### 文档
+
+- **`docs/ARCH.md` 补齐到当前代码状态**：引擎侧改动清单从 6 处补到 **11 处**
+  （补上 `work_dir` 校正、排行榜、`smoke`、缓存、截止门），每处标注对应测试。
+  新增两节维护者必须知道的约束：
+  - **改引擎前必须知道的两条**：可写根只能来自 `KAUTO_ROOT`（任何按
+    `__file__` 推导的地方装进 npm 包后都指向 `node_modules`）；
+    包内只读资源（`fixtures/`）不能跟着可写根走，否则设了 `KAUTO_ROOT`
+    就找不到夹具。
+  - **两类静默失败**：这几轮修掉的缺陷大多是同一类 —— 可见的失败会自动暴露，
+    静默的失败才是真问题（轮数夹紧不说明、少暴露关键选项、缓存命中不标注、
+    描述与实现不符、OAuth token 被桥接忽略）。处理原则是把"我做了什么"
+    和"实际发生了什么"都变成返回值的一部分。
+  - 新增三个坑：`meta.json` 的绝对路径会压过 `KAUTO_ROOT`；
+    面板与工具是两条代码路径（只有 `invoke` 有锁）；PowerShell here-string 吃反引号。
+
+- **`test_docs_sync.py` 从 10 项扩到 20 项**：检查 ARCH.md 是否记录了
+  全部 11 处引擎改动、"两类静默失败"章节及其三个例子、以及三个新增的坑。
+  文档落后于代码正是这个测试要抓的东西 —— 这一轮它抓到自己的清单只记到 6 处。
+
+### 测试
+
+- **`routes-behaviour.test.ts`（16 项）**：`registerRoutes` 此前从未被调用过，
+  `routes-guard.test.ts` 只覆盖 `isTrustedRequest` / `readBody` 两个纯函数。
+  新测试用假的 `register` 收集注册项、假的 `req`/`res` 驱动 handler，覆盖：
+  10 条路由全部注册 / 无 cookie 返回 401 / 非 POST 返回 405 /
+  `setup` 立刻回 jobId 而不是等安装完成 / `doctor` 把修复建议写进日志 /
+  `smoke` 在引擎未就绪时**拒绝演练且不 spawn** / `smoke` 输出未覆盖项 /
+  `leaderboard` 空 slug 不调引擎 / `install-skill` 回命令而不静默 clone /
+  job 路由 404 与增量读取 / cancel 幂等 / **handler 抛异常仍回 JSON**
+  （面板没有"路由永不响应"的错误通道）。
+
 ### 优化
 
 - **排行榜缓存**：实测单次 **15.7 秒**（跨网往返 + 快照落盘），而面板上

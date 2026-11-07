@@ -83,9 +83,26 @@ arch = ARCH.read_text(encoding="utf-8") if ARCH.exists() else ""
 mark("ARCH.md 存在", bool(arch))
 if arch:
     mark("有引擎侧改动清单", "引擎侧改动清单" in arch)
-    # 每一处引擎改动都要有，否则下一个人会重新踩
-    for key in ("KAUTO_ROOT", "KAUTO_SKILL_ROOT", "try_or_none", "format json"):
+    # 每一处引擎改动都要有，否则下一个人会重新踩。
+    # 这份清单此前只记到 6 处，实际已有 11 处 —— 文档落后于代码正是
+    # 这个测试要抓的东西，所以把"该出现的标记"补全。
+    for key in ("KAUTO_ROOT", "KAUTO_SKILL_ROOT", "try_or_none", "format json",
+                "work_dir", "leaderboard", "smoke", "缓存", "deadline"):
         mark(f"ARCH 记录 {key}", key in arch)
+
+print("\n=== 7) ARCH.md 记录了最贵的教训（两类静默失败）===")
+if arch:
+    # 这几轮修掉的缺陷大多同类，不写下来下一个人会重犯。
+    mark("有静默失败章节", "静默失败" in arch)
+    for key in ("rounds.requested", "cached_age_seconds", "work_dir_relocated_from"):
+        mark(f"ARCH 举了 {key} 作例子", key in arch)
+    # 两类里"少暴露"那一半只能静态核对，得点出对应测试
+    mark("指出只能静态核对的那一半", "test_tool_cli_parity" in arch)
+
+print("\n=== 8) ARCH.md 记录了新增的坑 ===")
+if arch:
+    for key in ("meta.json", "面板与工具的代码路径是两条", "here-string"):
+        mark(f"ARCH 记录坑：{key}", key in arch)
 
 print("\n=== 汇总 ===")
 bad = [n for n, ok, _ in results if not ok]

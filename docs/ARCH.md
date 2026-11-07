@@ -91,18 +91,33 @@ dsh-yuan-kaggle-auto/
 （`doctor` 是纯 JSON、`baseline` 先打进度行再打 JSON、`validate` 是人读文本）。
 `tests/runner-parse.test.ts` 用真实形态覆盖了这四类。
 
-## 4. 引擎侧改动清单（相对本地 CLI 版，共 6 处）
+## 4. 引擎侧改动清单（相对本地 CLI 版，共 11 处）
 
 每处都有对应测试，改坏了会被抓住。
 
 | # | 改动 | 文件 | 为什么 | 测试 |
 |---|---|---|---|---|
-| 1 | `KAUTO_ROOT` 覆盖 | `kapi.py` | 可写根不能落在 node_modules | `test_official_rules`（间接）+ 手工验证 |
+| 1 | `KAUTO_ROOT` 覆盖 | `kapi.py` | 可写根不能落在 node_modules | `test_workdir_relocation` |
 | 2 | `KAUTO_SKILL_ROOT` 覆盖 | `skillbridge.py` | 桥接目录由用户选，不随包带 | `test_submit_paths` |
 | 3 | `try_or_none()` | `skillbridge.py` | 六条调用路径在无桥接时降级 | `test_accept_rules_probe` |
-| 4 | `list --format json` | `cli.py` | 宿主需要结构化结果 | 手工 + smoke |
+| 4 | `list --format json` | `cli.py` | 宿主需要结构化结果 | `test_tool_cli_parity` + smoke |
 | 5 | 官方评测页 → 可执行判据 | `skillbridge.py` + `subcheck.py` + `cli.py` | 评测页常写本地看不到的硬约束，而废提交照样耗配额 | `test_official_rules` |
 | 6 | `run_all_tests.py` 自适应布局 | `run_all_tests.py` | tests 可能在 `tests/` 或 `tools/` | 套件本身 |
+| 7 | `load_work()` 校正 `work_dir` | `prep.py` | meta.json 存的是**打包者机器**的绝对路径；不校正则包内 5 个夹具在别人机器上全失效，且 `KAUTO_ROOT` 重定向失效会让测试污染真实工作区 | `test_workdir_relocation` |
+| 8 | `leaderboard` 子命令 + 奖牌线 | `skillbridge.py` + `cli.py` | `status` 答不了"离奖牌还差多少"，而那是决定要不要继续迭代的唯一依据 | `test_leaderboard_bridge` |
+| 9 | `smoke` 子命令（离线演练） | `cli.py` | 面板那个"跑冒烟"按钮原先只调体检，一个建模步骤都没跑 | `test_smoke_command` |
+| 10 | 排行榜缓存 + `--refresh` | `skillbridge.py` + `cli.py` | 实测单次 15.7 秒，而面板"查排行"是可重复的只读操作 | `test_leaderboard_cache` |
+| 11 | `_deadline_gate` + `run` 感知截止 | `submit.py` + `cli.py` | 比赛结束后提交被拒的错误信息会把人引向"改文件重试"，而真正原因是这个比赛不收了 | `test_deadline_gate` |
+
+### 改引擎前必须知道的两条
+
+**可写根只能来自 `KAUTO_ROOT`。** 引擎里任何"按 `__file__` 推导目录"的地方，
+装进 npm 包之后都指向 `node_modules` —— 升级即丢数据、只读安装直接失败。
+目前只有 `kapi.py` 一处推导，其余模块都从它导入。
+
+**包内只读资源不能跟着可写根走。** `fixtures/`、`requirements.lock.txt` 属包内，
+用 `Path(__file__).parent.parent` 定位；`work/` `data/` `reports/` 属可写，
+用 `kapi.ROOT`。混用会导致"设了 `KAUTO_ROOT` 就找不到夹具"（`smoke` 首版就这样）。
 
 ## 5. 提交门（两道，缺一不可）
 
@@ -118,6 +133,33 @@ kaggle_submit { slug, confirm }        tools.ts: submitGate()
 
 引擎侧还有自己的门（`_pre_submit_gate` 溯源指纹、形状校验、官方规则），
 外壳不越权、也不替它做决定。
+
+## 5.1 两类静默失败（本项目最贵的教训）
+
+这几轮修掉的缺陷大多是同一类：**代码能跑、测试能过，但用户得到的信息是错的**。
+按可见度分成两种，处理方式完全不同：
+
+**可见的失败**会自动暴露，代价低：
+
+- 工具传了引擎不认的选项 → `unrecognized arguments`，exit 2；
+- 提交前形状校验不过 → 报错并拒绝提交。
+
+**静默的失败**才是真问题，它们不产生任何错误信息：
+
+| 缺陷 | 表现 | 为什么难发现 |
+|---|---|---|
+| 轮数被夹紧不说明 | 要求 10 轮、实际跑 4 轮 | 返回里一切正常，只是少做了事 |
+| 工具少暴露关键选项 | 用户不知道有更便宜的路 | "没有"和"不存在"在界面上一样 |
+| 缓存命中不标注 | 几分钟前的名次被当成实时值 | 数字看起来是对的，只是旧的 |
+| 描述与实现不符 | 描述写 120 秒、实际等 900 秒 | 用户按描述规划，代码不读描述 |
+| OAuth token 被桥接忽略 | CLI 能用，桥接说"没凭据" | 两套凭据视图，各自都"正常" |
+
+处理这类问题的原则：**把"我做了什么"和"实际发生了什么"都变成返回值的一部分。**
+`rounds.requested` / `rounds.effective`、`cached_age_seconds`、
+`work_dir_relocated_from`、`official_rules_applied` 都是这个原则的产物。
+
+而"少暴露"那一半无法靠运行错误发现，只能静态核对 ——
+这就是 `test_tool_cli_parity.py` 存在的原因。
 
 ## 6. 踩过的坑（改代码前先读）
 
@@ -152,6 +194,34 @@ kaggle_submit { slug, confirm }        tools.ts: submitGate()
 插件包里这些前提不成立，失败语义是"问错了地方"。
 → `tests/_layout_guard.py`：目标不存在时以退出码 77 SKIP（附原因），
 存在则照原样执行。`run_all_tests.py` 认识 77。
+
+### 6.6 `meta.json` 里的绝对路径会压过 `KAUTO_ROOT`
+
+`prepare` 把 `work_dir` 写成当时的绝对路径。这个值落盘后固定在文件里，于是：
+
+- 随包分发的 5 个夹具在别人机器上指向不存在的目录；
+- `KAUTO_ROOT` 重定向失效，用临时根跑测试会**写回真实工作区**
+  （实测：一次演练把真实夹具的 journal 从 5 个节点改成 7 个）。
+
+→ `load_work()` 无条件把 `work_dir` 校正为当前根，原值保留在
+`work_dir_relocated_from`。**无条件**是关键：字段为空时 `Path("")` 会变成 `"."`，
+产物落到进程 cwd，比写回旧路径更难查。
+
+### 6.7 面板与工具的代码路径是两条
+
+面板路由调 `bridge.*`，模型调 `tools.ts` 的 `invoke`。两者都会走到 `runEngine`，
+但**只有 `invoke` 有锁和前置检查**。`bridge.smoke()` 首版就没锁，
+于是面板点一次 + 模型调一次会同时跑两个演练（每次训练 3 次 LightGBM）。
+
+→ 锁表放在 `createBridge` 里，两边通过 `bridge.lock` / `bridge.smokeLock()` 共用。
+新增面板动作时先问：它要不要和某个工具串行？
+
+### 6.8 PowerShell here-string 会吃掉反引号
+
+用 `@"..."@` 写含反引号的中文文档时，反引号被当转义符：
+`` `rounds.effective` `` 变成了换行加 `ounds.effective`。
+
+→ 中文 + 反引号的内容用 `write` 工具或文件拼接，不要用 here-string 生成。
 
 ## 7. 加东西时改哪里
 
