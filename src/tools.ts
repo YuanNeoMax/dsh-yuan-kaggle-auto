@@ -117,6 +117,56 @@ async function invoke(
   }
 }
 
+// ── rounds budget ───────────────────────────────────────────────────────────
+
+export interface RoundsPlan {
+  /** The value actually passed to the engine. */
+  effective: number
+  /** What the caller asked for, when it differed. */
+  requested?: number
+  /** Set when the request was clamped; explains it in the caller's terms. */
+  note?: string
+}
+
+/**
+ * Resolve `rounds` against the configured ceiling.
+ *
+ * The clamping itself is correct — `maxRounds` exists so a model cannot burn an
+ * hour of local compute by asking for 50 rounds. What was wrong is that the
+ * clamp was **silent**: the engine ran 4 rounds, the caller asked for 10, and
+ * nothing in the reply said so. A model that believes it iterated 10 times will
+ * draw conclusions from evidence it never collected.
+ *
+ * So the caller gets `effective` plus a `note` naming both numbers, and the
+ * tools attach that to their result.
+ *
+ * `min` is 0 for `run` (rounds=0 legitimately means "baseline only, skip
+ * iteration") and 1 for `iterate` (zero rounds there would be a no-op call).
+ */
+export function planRounds(settings: Settings, args: { rounds?: unknown }, min: number): RoundsPlan {
+  const ceiling = Math.max(min, settings.maxRounds)
+  const raw = args.rounds
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) {
+    return { effective: ceiling }
+  }
+  const wanted = Math.round(raw)
+  const effective = Math.min(ceiling, Math.max(min, wanted))
+  if (effective === wanted) return { effective, requested: wanted }
+  if (wanted > ceiling) {
+    return {
+      effective,
+      requested: wanted,
+      note: `请求 ${wanted} 轮，但配置上限是 ${ceiling} 轮，实际只跑 ${effective} 轮。` +
+        `要更多轮请先在设置里调高「迭代轮数上限」。`,
+    }
+  }
+  return {
+    effective,
+    requested: wanted,
+    note: `请求 ${wanted} 轮，低于允许的最小值 ${min}，实际按 ${effective} 轮执行。`,
+  }
+}
+
 // ── submission gate ─────────────────────────────────────────────────────────
 
 export interface SubmitGate {
@@ -463,17 +513,17 @@ export function registerTools(reg: Reg, deps: ToolDeps): void {
     run: async (args) => {
       const settings = deps.settings()
       const argv = ['iterate', String(args.slug ?? '')]
-      const rounds = typeof args.rounds === 'number' && Number.isFinite(args.rounds)
-        ? Math.min(settings.maxRounds, Math.max(1, Math.round(args.rounds)))
-        : settings.maxRounds
-      argv.push('--rounds', String(rounds))
+      const plan = planRounds(settings, args, 1)
+      argv.push('--rounds', String(plan.effective))
       if (typeof args.parallel === 'number' && Number.isFinite(args.parallel)) {
         argv.push('--parallel', String(Math.max(1, Math.round(args.parallel))))
       }
       if (typeof args.foldsForOof === 'number' && Number.isFinite(args.foldsForOof)) {
         argv.push('--folds-for-oof', String(Math.max(0, Math.round(args.foldsForOof))))
       }
-      return invoke(deps, argv, { timeoutMs: 0 })
+      const run = await invoke(deps, argv, { timeoutMs: 0 })
+      // Attach the clamp so a truncated run is never mistaken for a full one.
+      return plan.note ? result({ ...run, rounds: plan, roundsNote: plan.note }) : run
     },
   })
 
@@ -492,12 +542,20 @@ export function registerTools(reg: Reg, deps: ToolDeps): void {
     parameters: {
       slug: slugParam.slug,
       top: { type: 'number', description: 'How many top rows to include (default 10).' },
+      refresh: {
+        type: 'boolean',
+        description: '跳过缓存重新拉取。刚提交完想看新名次时用；平时不必（单次约 16 秒）。',
+      },
     },
     run: async (args) => {
       const argv = ['leaderboard', String(args.slug ?? '')]
       if (typeof args.top === 'number' && Number.isFinite(args.top)) {
         argv.push('--top', String(Math.round(args.top)))
       }
+      // Measured 15.7 s uncached, 1.8 s cached. Submitting changes the rank, so
+      // a caller that just submitted needs a bypass; everything else should get
+      // the fast path by default.
+      if (args.refresh === true) argv.push('--refresh')
       return invoke(deps, argv)
     },
   })
@@ -555,12 +613,23 @@ export function registerTools(reg: Reg, deps: ToolDeps): void {
           precheck: pre,
           hint: browserHint(deps, `https://www.kaggle.com/competitions/${slug}`),
         })
-      }      const argv = ['submit', slug]
+      }
+      const argv = ['submit', slug]
       if (typeof args.message === 'string' && args.message.trim()) argv.push('--message', args.message.trim())
       if (typeof args.expect === 'number' && Number.isFinite(args.expect)) argv.push('--expect', String(args.expect))
       argv.push(...gate.argv)
       const run = await invoke(deps, argv, { timeoutMs: 0 })
-      if (run.ok) return run
+      if (run.ok) {
+        // A submission changes the leaderboard, so any cached board for this
+        // slug is now wrong. Best-effort refresh: a failure here must not turn a
+        // successful submission into a reported failure.
+        void invoke(deps, ['leaderboard', slug, '--refresh'], { lock: `slug:${slug}`, timeoutMs: 60_000 })
+          .catch(() => undefined)
+        return result({
+          ...run,
+          leaderboardCacheInvalidated: true,
+        })
+      }
       // Exit 4 is the engine's deadline gate: the competition no longer accepts
       // submissions. Say that plainly, because the generic failure text reads
       // like "your file is wrong" and sends people into a pointless retrain loop.
@@ -616,10 +685,10 @@ export function registerTools(reg: Reg, deps: ToolDeps): void {
       const settings = deps.settings()
       const slug = String(args.slug ?? '')
       const argv = ['run', slug]
-      const rounds = typeof args.rounds === 'number' && Number.isFinite(args.rounds)
-        ? Math.min(settings.maxRounds, Math.max(0, Math.round(args.rounds)))
-        : settings.maxRounds
-      argv.push('--rounds', String(rounds))
+      // `run` allows 0 rounds: that legitimately means "baseline only, skip
+      // iteration and produce the baseline submission".
+      const plan = planRounds(settings, args, 0)
+      argv.push('--rounds', String(plan.effective))
       const wantsSubmit = args.submit === true
       let withheld: string | undefined
       if (wantsSubmit) {
@@ -632,14 +701,19 @@ export function registerTools(reg: Reg, deps: ToolDeps): void {
         }
       }
       const run = await invoke(deps, argv, { timeoutMs: 0 })
-      if (withheld) {
-        return result({
-          ...run,
-          submitWithheld: withheld,
-          hint: browserHint(deps, `https://www.kaggle.com/competitions/${slug}`),
-        })
+      // Both the clamp and the withheld submission are facts the caller would
+      // otherwise have to infer from engine output. State them.
+      const extra: Record<string, unknown> = {}
+      if (plan.note) {
+        extra.rounds = plan
+        extra.roundsNote = plan.note
       }
-      return run
+      if (withheld) {
+        extra.submitWithheld = withheld
+        extra.hint = browserHint(deps, `https://www.kaggle.com/competitions/${slug}`)
+      }
+      if (Object.keys(extra).length === 0) return run
+      return result({ ...run, ...extra })
     },
   })
 

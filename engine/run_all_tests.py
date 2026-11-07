@@ -122,6 +122,7 @@ PROBE = [
     "test_workdir_relocation.py",
     "test_smoke_command.py",
     "test_tool_cli_parity.py",
+    "test_leaderboard_cache.py",
 ]
 
 # 只把这些当作真失败信号。
@@ -186,6 +187,7 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
 
 
 

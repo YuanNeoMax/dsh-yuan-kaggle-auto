@@ -438,7 +438,7 @@ def submit(sub_file: Path, slug: str, message: str, confirm: bool,
             "via": "skill_script"}
 
 
-def leaderboard(slug: str, top: int = 10) -> dict:
+def leaderboard(slug: str, top: int = 10, refresh: bool = False) -> dict:
     """排行榜：榜首、自己的名次、奖牌线。
 
     ## 为什么这个能力值得合并
@@ -446,6 +446,18 @@ def leaderboard(slug: str, top: int = 10) -> dict:
     `status` 只回答"我交过什么、分数多少"，回答不了**"我这个分数离奖牌还差多少"**。
     后者是决定"要不要继续迭代"的唯一依据 —— 差 0.0005 值得再跑一轮，
     差 0.05 不如换个方向。而奖牌线只有排行榜接口给（`medal_lines`）。
+
+    ## 为什么要缓存（实测 15.7 秒）
+
+    面板上「查排行」是只读、可重复、无副作用的操作，用户会反复点。
+    实测单次 15.7 秒（走 skill 脚本那条路，含一次跨网往返 + 快照落盘），
+    反复点就是反复等十几秒 —— 而榜单在几分钟内不会变。
+
+    所以按 slug 缓存 `LEADERBOARD_TTL`（默认 3 分钟，可用环境变量覆盖）。
+    比 writeup 的 6 小时短得多：名次会随别人提交而变化，而
+    "我 vs 奖牌线"这个判断需要相对新鲜的数字。
+
+    `refresh=True` 跳过缓存。写操作（提交后）也该传它 —— 刚交完就要看新名次。
 
     ## 凭据处理与 `status` 同一套
 
@@ -460,6 +472,21 @@ def leaderboard(slug: str, top: int = 10) -> dict:
 
     out: dict = {"slug": slug}
 
+    # ── 0. 缓存（见上方说明：单次 15.7 秒，而榜单几分钟内不变）──────────────
+    cache_p = kapi.WORK_DIR / slug / "leaderboard_cache.json"
+    if not refresh and cache_p.exists():
+        try:
+            c = json.loads(cache_p.read_text(encoding="utf-8"))
+            age = __import__("time").time() - float(c.get("fetched_at", 0))
+            payload = c.get("payload")
+            if age < _leaderboard_ttl() and isinstance(payload, dict) and payload:
+                payload = dict(payload)
+                payload["cached"] = True
+                payload["cached_age_seconds"] = round(age, 1)
+                return payload
+        except Exception:
+            pass    # 缓存坏了就走网络，缓存不该成为故障点
+
     # ── 1. CLI 原生路径：与 kaggle 命令共用凭据，不会出现两套视图 ──────────
     cli_err = None
     try:
@@ -473,6 +500,7 @@ def leaderboard(slug: str, top: int = 10) -> dict:
 
     if out.get("rows"):
         _attach_user_rank(out, slug)
+        _write_leaderboard_cache(cache_p, out)
         return out
 
     # ── 2. skill 脚本：它额外交回 medal_lines / team_count / 变化历史 ───────
@@ -508,7 +536,26 @@ def leaderboard(slug: str, top: int = 10) -> dict:
 
     data.setdefault("slug", slug)
     data.setdefault("source", "kaggle-skill")
+    _write_leaderboard_cache(cache_p, data)
     return data
+
+
+def _leaderboard_ttl() -> float:
+    """榜单缓存有效期。3 分钟：名次会随别人提交变化，但不必每次点都重拉。"""
+    try:
+        return float(os.environ.get("KAUTO_LEADERBOARD_TTL", "") or 180)
+    except ValueError:
+        return 180.0
+
+
+def _write_leaderboard_cache(path: Path, payload: dict) -> None:
+    """写缓存。失败一律忽略 —— 缓存是加速手段，不是正确性前提。"""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        record = {"fetched_at": __import__("time").time(), "payload": payload}
+        path.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
 
 
 def _parse_leaderboard(raw: str) -> list[dict]:

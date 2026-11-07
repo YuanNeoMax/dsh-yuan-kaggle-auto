@@ -379,7 +379,9 @@ def cmd_leaderboard(args) -> int:
     而"要不要再跑一轮"完全取决于这个差距：差 0.0005 值得，
     差 0.05 不如换个方向。奖牌线只有排行榜接口给。
     """
-    lb, why = skillbridge.try_or_none(skillbridge.leaderboard, args.slug, top=args.top)
+    lb, why = skillbridge.try_or_none(
+        skillbridge.leaderboard, args.slug, top=args.top,
+        refresh=getattr(args, "refresh", False))
     if lb is None:
         print(f"[kauto] 排行榜需要 kaggle-skill 桥接（可选）。{why}")
         return 2
@@ -400,6 +402,10 @@ def cmd_leaderboard(args) -> int:
                 print(f"  {zone:6s} 线  {medals[zone]}")
     elif lb.get("awards_medals") is False:
         print("  这场比赛不发奖牌（Getting Started / Knowledge 类）")
+    # 缓存命中时要说明，否则用户会把几分钟前的名次当成刚刚的实时值。
+    if lb.get("cached"):
+        print(f"  （缓存：{lb.get('cached_age_seconds', '?')} 秒前取的；"
+              f"要看实时值加 --refresh）")
     print()
     _p(lb)
     return 0
@@ -1131,6 +1137,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("leaderboard", help="排行榜：榜首、我的名次、奖牌线（需凭据）")
     p.add_argument("slug")
     p.add_argument("--top", type=int, default=10, help="榜首取前几名")
+    p.add_argument("--refresh", action="store_true",
+                   help="跳过缓存重新拉取（刚提交完想看新名次时用）")
     p.set_defaults(fn=cmd_leaderboard)
 
     p = sub.add_parser("list", help="列比赛")
