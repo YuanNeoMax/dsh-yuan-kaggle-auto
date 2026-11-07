@@ -21,6 +21,8 @@ export interface BoardPayload extends Record<string, unknown> {
   userRank?: unknown
   awards_medals?: unknown
   source?: unknown
+  deadline?: unknown
+  ended?: unknown
 }
 
 const label = (zone: string): string =>
@@ -57,5 +59,13 @@ export function summariseBoard(payload: BoardPayload): string[] {
     // Do not imply "no medals" when the answer simply was not fetched.
     lines.push('奖牌线  需要 skill 桥接才能读到')
   }
+
+  // Deadline is worth showing: a finished competition means further iteration
+  // cannot change anything, which is exactly the decision this panel serves.
+  const deadline = payload.deadline
+  if (typeof deadline === 'string' && deadline !== '') {
+    lines.push(`${payload.ended === true ? '已结束' : '截止'}  ${deadline}`)
+  }
+
   return lines
 }

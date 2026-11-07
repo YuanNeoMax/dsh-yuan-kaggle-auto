@@ -34,6 +34,95 @@ def _p(obj) -> None:
     """带缩进的 JSON 打印 —— 与 cli.py 里的同名辅助保持一致。"""
     print(json.dumps(obj, ensure_ascii=False, indent=1))
 
+def _deadline_gate(slug: str) -> dict:
+    """比赛是否还收提交。
+
+    ## 这个门解决的是"错误信息指向错误方向"的问题
+
+    比赛结束（或提交入口关闭）后调提交接口，Kaggle 会拒绝，但本地拿到的
+    通常只是一个泛泛的错误。人看到它的第一反应是"我的文件有问题"，
+    于是反复改文件、重训、重交 —— 而真正的原因只有一个：这个比赛已经不收了。
+
+    所以在这里先把"收不收"查清楚，能早一步拦下就拦下，并把截止时间与
+    入口状态原样告诉用户，避免整轮瞎试。
+
+    ## 判断依据是两处独立证据
+
+    · `GetCompetition` 的 `deadline` / `submissionsDisabled`（站内 API）
+    · `brief` 的 `deadline` / `submissions_disabled`（skill 桥接，如果有）
+
+    两者都拿不到时**不拦**（返回 ok=True 并附 warning）——
+    查不到不等于已结束，因为"读不到"与"已结束"是两件不同的事，
+    把后者当结论会造成假拦截。
+
+    信任级别：`submissionsDisabled=true` 是硬证据（服务端明确说不收）；
+    仅 `deadline` 已过则降级为 warning 而不是硬拦 ——
+    有的比赛截止后仍接受 late submission，硬拦会把可用的机会拦掉。
+    """
+    from . import kapi
+
+    facts: dict = {}
+    try:
+        raw = kapi.site_api(
+            "/api/i/competitions.CompetitionService/GetCompetition"
+            f"?competitionName={kapi.urllib.request.quote(slug)}"
+        )
+        if raw.get("ok"):
+            data = raw.get("data") or {}
+            facts["deadline"] = data.get("deadline")
+            facts["submissions_disabled"] = data.get("submissionsDisabled")
+            facts["has_leaderboard"] = data.get("hasLeaderboard")
+    except Exception:
+        pass
+
+    if "deadline" not in facts:
+        return {"ok": True,
+                "warning": f"无法确认 {slug} 的截止时间（站内 API 不可用）；"
+                           f"提交失败时先怀疑比赛已结束，而不是文件格式。"}
+
+    if facts.get("submissions_disabled") is True:
+        return {"ok": False,
+                "reason": f"{slug} 的提交入口已在服务端关闭（submissionsDisabled=true）。",
+                "url": f"https://www.kaggle.com/competitions/{slug}/leaderboard"}
+
+    deadline_text = str(facts.get("deadline") or "")
+    if not deadline_text:
+        return {"ok": True, "warning": f"{slug} 未给出截止时间，无法预判。"}
+
+    expired, parsed = _parse_deadline(deadline_text)
+    if parsed is None:
+        return {"ok": True, "warning": f"截止时间格式无法解析：{deadline_text}"}
+    if expired:
+        return {"ok": True,
+                "warning": f"截止时间已过（{deadline_text}）。"
+                           f"提交仍会尝试 —— 有的比赛接受迟到提交；"
+                           f"若被拒，别再改文件重试，先去看比赛页是否已结束。"}
+    return {"ok": True, "deadline": deadline_text}
+
+
+def _parse_deadline(text: str) -> tuple[bool, object]:
+    """返回 (是否已过, 解析出的时间)。解析不了时时间为 None。"""
+    import datetime as _dt
+
+    raw = text.strip().replace("Z", "+00:00")
+    try:
+        moment = _dt.datetime.fromisoformat(raw)
+    except ValueError:
+        for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+            try:
+                moment = _dt.datetime.strptime(raw, fmt)
+                break
+            except ValueError:
+                continue
+        else:
+            return False, None
+
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=_dt.timezone.utc)
+    now = _dt.datetime.now(_dt.timezone.utc)
+    return moment <= now, moment
+
+
 def _check_entered(slug: str) -> dict:
     """提交前必须确认账号已加入该比赛。
 
@@ -203,6 +292,24 @@ def cmd_submit(args) -> int:
     if not args.yes:
         print("\n[kauto] 未提交：加 --yes 才会真正推到 Kaggle。")
         return 2
+
+    # ── 截止检查：放在 --yes 之后、真正提交之前 ────────────────────────────
+    #
+    # 为什么必须有这一步：比赛结束（或提交入口关闭）后调用提交接口，Kaggle 会
+    # 拒绝，但**本地拿不到"为什么"** —— 表现为一个很泛的错误，而人很容易
+    # 把它读成"文件有问题"，于是反复改文件重试。真正的原因只有一个：这个
+    # 比赛已经不收了。所以先把这件事查清楚并直接拦下来，省掉整轮瞎试。
+    #
+    # 放在 `--yes` 之后是刻意的：`--dry-run`/预检路径不该因此失败 ——
+    # 那些调用本来就不提交，检查截止反而会掩盖真正的形状问题。
+    deadline = _deadline_gate(args.slug)
+    if not deadline["ok"]:
+        print(f"[kauto] {deadline['reason']}", file=sys.stderr)
+        if deadline.get("url"):
+            print(f"[kauto] {deadline['url']}", file=sys.stderr)
+        return 4
+    if deadline.get("warning"):
+        print(f"\n   ⚠ {deadline['warning']}\n")
 
     expect = None
     bl = kapi.WORK_DIR / args.slug / "baseline.json"

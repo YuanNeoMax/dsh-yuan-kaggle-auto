@@ -56,3 +56,20 @@ describe('summariseBoard', () => {
     expect(summariseBoard({})).toEqual(['我的名次  （未加入或未提交）'])
   })
 })
+
+describe('summariseBoard deadline', () => {
+  it('shows an upcoming deadline', () => {
+    const lines = summariseBoard({ deadline: '2030-01-01T00:00:00Z' })
+    expect(lines.some((line) => line.includes('截止') && line.includes('2030'))).toBe(true)
+  })
+
+  it('says ended when the competition is over', () => {
+    const lines = summariseBoard({ deadline: '2020-01-01T00:00:00Z', ended: true })
+    expect(lines.some((line) => line.includes('已结束'))).toBe(true)
+  })
+
+  it('omits the line when no deadline was fetched', () => {
+    const lines = summariseBoard({})
+    expect(lines.some((line) => line.includes('截止'))).toBe(false)
+  })
+})

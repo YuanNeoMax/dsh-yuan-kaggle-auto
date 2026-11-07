@@ -115,6 +115,7 @@ PROBE = [
     "test_write_sub_id.py",
     "test_official_rules.py",
     "test_leaderboard_bridge.py",
+    "test_deadline_gate.py",
 ]
 
 # 只把这些当作真失败信号。

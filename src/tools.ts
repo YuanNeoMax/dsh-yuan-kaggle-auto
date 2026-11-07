@@ -520,13 +520,27 @@ export function registerTools(reg: Reg, deps: ToolDeps): void {
           precheck: pre,
           hint: browserHint(deps, `https://www.kaggle.com/competitions/${slug}`),
         })
-      }
-      const argv = ['submit', slug]
+      }      const argv = ['submit', slug]
       if (typeof args.message === 'string' && args.message.trim()) argv.push('--message', args.message.trim())
       if (typeof args.expect === 'number' && Number.isFinite(args.expect)) argv.push('--expect', String(args.expect))
       argv.push(...gate.argv)
       const run = await invoke(deps, argv, { timeoutMs: 0 })
       if (run.ok) return run
+      // Exit 4 is the engine's deadline gate: the competition no longer accepts
+      // submissions. Say that plainly, because the generic failure text reads
+      // like "your file is wrong" and sends people into a pointless retrain loop.
+      if (typeof run.exitCode === 'number' && run.exitCode === 4) {
+        return result({
+          ok: false,
+          submitted: false,
+          reason: 'competition_closed',
+          error: run.error,
+          advice:
+            '这个比赛已不再接受提交。不要去改文件或重训 —— 那不会改变结果。' +
+            '换一个仍在进行的比赛，或查看：' +
+            `https://www.kaggle.com/competitions/${slug}/leaderboard`,
+        })
+      }
       return result({
         ...run,
         hint: browserHint(deps, `https://www.kaggle.com/competitions/${slug}/rules`),
