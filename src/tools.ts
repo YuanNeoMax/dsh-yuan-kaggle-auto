@@ -451,6 +451,23 @@ export function registerTools(reg: Reg, deps: ToolDeps): void {
   })
 
   make({
+    name: 'kaggle_leaderboard',
+    description:
+      '排行榜：榜首、我的名次、奖牌线。这是判断"还值不值得继续迭代"的唯一依据 —— 差 0.0005 值得再跑一轮，差 0.05 不如换方向。需要 Kaggle 凭据。',
+    parameters: {
+      slug: slugParam.slug,
+      top: { type: 'number', description: 'How many top rows to include (default 10).' },
+    },
+    run: async (args) => {
+      const argv = ['leaderboard', String(args.slug ?? '')]
+      if (typeof args.top === 'number' && Number.isFinite(args.top)) {
+        argv.push('--top', String(Math.round(args.top)))
+      }
+      return invoke(deps, argv)
+    },
+  })
+
+  make({
     name: 'kaggle_rules',
     description:
       '读取比赛的官方页面（默认评测页）并把其中的硬约束变成可执行判据：行数、列数、允许的列名、取值范围。写提交文件前先查它，能少一次返工。公开页面不需要凭据。',
@@ -715,7 +732,7 @@ export function helpPayload(topic: string): ToolResult {
     topic: 'tools',
     core: [
       'kaggle_doctor / kaggle_setup / kaggle_connect',
-      'kaggle_list / kaggle_info / kaggle_status',
+      'kaggle_list / kaggle_info / kaggle_status / kaggle_leaderboard',
       'kaggle_prepare / kaggle_baseline / kaggle_iterate',
       'kaggle_write_sub / kaggle_rules / kaggle_validate / kaggle_submit / kaggle_receipt',
       'kaggle_run / kaggle_help',

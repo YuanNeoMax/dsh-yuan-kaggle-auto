@@ -20,6 +20,7 @@ export const DOCTOR_ROUTE = `${BASE}/doctor`
 export const PROBE_LLM_ROUTE = `${BASE}/probe-llm`
 export const SMOKE_ROUTE = `${BASE}/smoke`
 export const INSTALL_EGO_ROUTE = `${BASE}/install-ego`
+export const LEADERBOARD_ROUTE = `${BASE}/leaderboard`
 export const INSTALL_SKILL_ROUTE = `${BASE}/install-skill`
 export const JOBS_ROUTE = `${BASE}/jobs`
 
@@ -56,6 +57,8 @@ export interface RouteBridge {
   status(): Promise<EngineStatus>
   setup(options?: { force?: boolean }): Promise<unknown>
   installEgo(options?: { version?: string }): Promise<InstallOutcome>
+  /** Read-only leaderboard probe; returns the engine's JSON verbatim. */
+  leaderboard(slug: string, top?: number): Promise<Record<string, unknown>>
   egoAvailable(): boolean
   jobs: JobBoard
 }
@@ -291,6 +294,22 @@ export function registerRoutes(
           ? `git clone --depth 1 https://github.com/shepsci/kaggle-skill "${dir}"`
           : '先在设置里填写「skill 桥接目录」，再执行返回的 git clone 命令',
       })
+    }),
+  )
+
+  add(
+    LEADERBOARD_ROUTE,
+    onlyPost(async (req, res) => {
+      // 只读查询：不启动 job，直接把结果带回来（排行榜是一次网络往返，
+      // 秒级完成，套上轮询反而让面板显得迟钝）。
+      const body = await readBody(req)
+      const slug = String(body.slug ?? '').trim()
+      if (!slug) {
+        json(res, 200, { ok: false, error: '需要 slug（比赛标识，如 titanic）' })
+        return
+      }
+      const result = await bridge.leaderboard(slug, Number(body.top ?? 10) || 10)
+      json(res, 200, result)
     }),
   )
 

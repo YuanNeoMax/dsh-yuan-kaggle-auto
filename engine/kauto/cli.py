@@ -370,6 +370,39 @@ def cmd_rules(args) -> int:
     return 0
 
 
+def cmd_leaderboard(args) -> int:
+    """排行榜：判断"还值不值得继续迭代"的依据。
+
+    `status` 只回答"我交过什么、多少分"；它回答不了**离奖牌还差多少**。
+    而"要不要再跑一轮"完全取决于这个差距：差 0.0005 值得，
+    差 0.05 不如换个方向。奖牌线只有排行榜接口给。
+    """
+    lb, why = skillbridge.try_or_none(skillbridge.leaderboard, args.slug, top=args.top)
+    if lb is None:
+        print(f"[kauto] 排行榜需要 kaggle-skill 桥接（可选）。{why}")
+        return 2
+
+    # 摘要：把"我 vs 榜首 vs 奖牌线"摊平成一眼能读的三行
+    mine = lb.get("user_rank")
+    total = lb.get("team_count")
+    medals = lb.get("medal_lines") or {}
+    rows = lb.get("rows") or []
+    print(f"比赛 {args.slug} | 队伍 {total} | 奖牌赛: {lb.get('awards_medals')}")
+    if rows:
+        top1 = rows[0]
+        print(f"  榜首  {top1.get('team')}  {top1.get('score')}")
+    print(f"  我的名次  {mine if mine else '（未加入或未提交）'}")
+    if medals:
+        for zone in ("gold", "silver", "bronze"):
+            if zone in medals:
+                print(f"  {zone:6s} 线  {medals[zone]}")
+    elif lb.get("awards_medals") is False:
+        print("  这场比赛不发奖牌（Getting Started / Knowledge 类）")
+    print()
+    _p(lb)
+    return 0
+
+
 def cmd_status(args) -> int:
     st, why = skillbridge.try_or_none(skillbridge.status, args.slug, limit=args.limit)
     if st is None:
@@ -897,6 +930,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("slug")
     p.add_argument("--limit", type=int, default=5)
     p.set_defaults(fn=cmd_status)
+
+    p = sub.add_parser("leaderboard", help="排行榜：榜首、我的名次、奖牌线（需凭据）")
+    p.add_argument("slug")
+    p.add_argument("--top", type=int, default=10, help="榜首取前几名")
+    p.set_defaults(fn=cmd_leaderboard)
 
     p = sub.add_parser("list", help="列比赛")
     p.add_argument("--search", default="")

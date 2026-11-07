@@ -72,6 +72,8 @@ AI 内部会调 `kaggle_run`，它按
 | `kaggle_list` | 列可参赛比赛 |
 | `kaggle_info` | 官方指标、每日限额、是否 notebook-only |
 | `kaggle_status` | 自己在这场比赛里的排名与剩余次数 |
+| `kaggle_leaderboard` | 榜首、我的名次、奖牌线 —— 判断"还值不值得再迭代"的依据 |
+| `kaggle_rules` | 读官方评测页，把硬约束变成可执行判据（行数/列数/允许列名/值域） |
 | `kaggle_prepare` | 下载 + 切分 + schema 推断 |
 | `kaggle_baseline` | LightGBM 基线 + K 折 CV |
 | `kaggle_iterate` | LLM 树搜索迭代特征工程 |
@@ -119,6 +121,21 @@ AI 内部会调 `kaggle_run`，它按
 - `autoSubmit` 只表示"agent 可以自己决定提交"，**不跳过 confirm**。
 
 关闭 `requireConfirm` 之后仍需要 `confirm: true` —— 那一步是"我确实要花这次配额"。
+
+### 官方格式约束会进本地校验
+
+本地校验分两层：
+
+1. **结构层**（永远可跑）：列名、行数、id 与 `sample_submission` 对齐（含前导零与精度）、
+   重复 id、空值、取值分布。
+2. **官方层**（装了 skill 桥接时可跑）：读比赛的**评测页原文**，把其中会导致提交被判废的
+   硬约束抽成可执行判据 —— 例如 titanic 的
+   "exactly 418 entries plus a header row … error if you have extra columns"。
+
+第二层为什么必要：一次**报错的提交同样可能占用当日配额**。能在本地读到官方口径，
+就把"会不会白烧一次提交"从猜测变成可判定。
+
+`kaggle_rules` 可以在写 `write-sub` **之前**先查一遍规则，少一次返工。
 
 ## 可选组件
 

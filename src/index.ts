@@ -16,6 +16,7 @@ import { engineRootFor, resolvePaths, ENGINE_DIR, type ResolvedPaths } from './p
 import { findPython } from './python.ts'
 import { venvPython } from './paths.ts'
 import { installEngine, readStatus, type EngineStatus } from './setup.ts'
+import { runEngine } from './runner.ts'
 import { installCompanion, EGO_ENTRY_ID, EGO_PACKAGE, type InstallOutcome } from './installer.ts'
 import { createJobBoard } from './jobs.ts'
 import { registerRoutes, type RouteRegister } from './routes.ts'
@@ -73,6 +74,8 @@ export interface HostBridge {
   status(): Promise<EngineStatus>
   setup(options?: { force?: boolean; onLine?: (line: { stream: string; text: string }) => void }): Promise<unknown>
   installEgo(options?: { version?: string }): Promise<InstallOutcome>
+  /** Read-only leaderboard probe for the panel; resolves the engine's JSON. */
+  leaderboard(slug: string, top?: number): Promise<Record<string, unknown>>
   egoAvailable(): boolean
   jobs: ReturnType<typeof createJobBoard>
 }
@@ -180,6 +183,32 @@ function createBridge(ctx: HostServices & Context, raw: Settings): HostBridge & 
       } catch (error) {
         job.finish(false)
         throw error
+      }
+    },
+    leaderboard: async (slug: string, top = 10) => {
+      // Read-only, one network round trip: no job, no lock. A panel that has to
+      // poll for a leaderboard read feels broken even when it is not.
+      const found = await findPython(settings(), process.env)
+      if (!found.ok) {
+        return { ok: false, error: found.reason, hint: found.hint, needsSetup: true }
+      }
+      const venv = venvPython(paths().venvDir)
+      const python = existsSync(venv) ? venv : found.candidate.command
+      const run = await runEngine(['leaderboard', slug, '--top', String(Math.max(1, top))], {
+        python,
+        paths: paths(),
+        settings: settings(),
+        subprocess: (ctx as unknown as HostServices).subprocess as ToolsSpawn | undefined,
+      }, { timeoutMs: 120_000 })
+      const value = run.value
+      if (run.ok && value !== null && typeof value === 'object' && !Array.isArray(value)) {
+        return { ok: true, ...(value as Record<string, unknown>) }
+      }
+      return {
+        ok: run.ok,
+        error: run.error,
+        stdout: run.stdout.trim().slice(-1200) || undefined,
+        stderr: run.stderr.trim().slice(-800) || undefined,
       }
     },
     egoAvailable: () => {

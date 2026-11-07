@@ -17,6 +17,7 @@
 import * as React from 'react'
 import { DEFAULTS, ENTRY_ID, resolveConfig, type Settings } from '../config.ts'
 import { GLYPHS, MARK_SVG, glyphCss, type GlyphName } from './icons.ts'
+import { summariseBoard } from './board.ts'
 
 interface Result<T> {
   ok: boolean
@@ -174,6 +175,9 @@ function Section({ ctx }: { ctx: ClientContext }): React.ReactElement {
   const [busy, setBusy] = React.useState<string>('')
   const [log, setLog] = React.useState<string[]>([])
   const [error, setError] = React.useState<string>('')
+  const [slug, setSlug] = React.useState('')
+  const [board, setBoard] = React.useState<{ summary?: string[]; error?: string } | undefined>(undefined)
+  const [boardError, setBoardError] = React.useState('')
 
   const dirtyRef = React.useRef(false)
   dirtyRef.current = dirty
@@ -284,6 +288,51 @@ function Section({ ctx }: { ctx: ClientContext }): React.ReactElement {
     [ctx, refreshStatus],
   )
 
+  /**
+   * One-shot leaderboard read.
+   *
+   * Deliberately not a job: the engine answers in one round trip, and a panel
+   * that has to poll for a read feels broken even when it is not. The same
+   * numbers are also summarised into readable lines here, so the reader does
+   * not have to parse JSON in a settings panel.
+   */
+  const queryLeaderboard = React.useCallback(async () => {
+    if (!ctx.fetch) {
+      setBoardError('宿主未提供 fetch，无法查询')
+      return
+    }
+    const target = slug.trim()
+    if (!target) {
+      setBoardError('先填比赛标识，例如 titanic')
+      return
+    }
+    setBusy('leaderboard')
+    setBoardError('')
+    try {
+      const response = await ctx.fetch('/api/yuan-kaggle/leaderboard', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ slug: target, top: 10 }),
+      })
+      const payload = (await response.json()) as Record<string, unknown> & {
+        ok?: boolean
+        error?: string
+        hint?: string
+      }
+      if (!payload.ok) {
+        setBoard(undefined)
+        setBoardError([payload.error, payload.hint].filter(Boolean).join(' · ') || '查询失败')
+        return
+      }
+      setBoard({ summary: summariseBoard(payload) })
+    } catch (cause) {
+      setBoard(undefined)
+      setBoardError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setBusy((current) => (current === 'leaderboard' ? '' : current))
+    }
+  }, [ctx, slug])
+
   const statusRows = status?.items ?? []
   const ready = status?.ready === true
 
@@ -321,6 +370,43 @@ function Section({ ctx }: { ctx: ClientContext }): React.ReactElement {
         <p className="text-muted text-sm mt-2">
           初始化会创建独立 venv 并安装 pandas / numpy / scikit-learn / lightgbm / kaggle，只需一次。之后命中标记即秒回。
         </p>
+      </section>
+
+      <section className="py-3 border-t border-line">
+        <div className="text-sm text-muted mb-2">查排行</div>
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            type="text"
+            value={slug}
+            onChange={(event) => setSlug(event.target.value)}
+            placeholder="比赛标识，如 titanic"
+            aria-label="比赛标识"
+            className="bg-page border border-line rounded-md px-2 py-1 text-sm text-label min-w-0 flex-1 basis-40"
+          />
+          <SecondaryButton
+            label="查询"
+            onClick={() => void queryLeaderboard()}
+            busy={busy === 'leaderboard'}
+            disabled={Boolean(busy) || slug.trim() === ''}
+          />
+        </div>
+        <p className="text-muted text-xs mt-1">
+          榜首、我的名次、奖牌线。这是判断"还值不值得再迭代"的依据：差 0.0005 值得再跑一轮，差 0.05 不如换方向。
+        </p>
+        {board && (
+          <div className="mt-2 divide-y divide-line border-t border-line">
+            {(board.summary ?? []).map((line, index) => (
+              <div
+                key={`${line}-${index}`}
+                className="grid grid-cols-[1fr] py-1.5 text-sm text-label @[24rem]:grid-cols-[auto_1fr] @[24rem]:gap-x-3"
+              >
+                <span className="text-muted">{line.split(/  +/)[0]}</span>
+                <span className="break-all">{line.split(/  +/).slice(1).join('  ')}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        {boardError !== '' && <p className="text-danger text-sm mt-2 break-words">{boardError}</p>}
       </section>
 
       <section className="py-3 border-t border-line">

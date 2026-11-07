@@ -88,7 +88,8 @@ def try_or_none(fn, *args, **kwargs):
 
 
 
-def _run(cmd: list[str], timeout: int = 300) -> tuple[str, str, int]:
+def _run(cmd: list[str], timeout: int = 300,
+         extra_env: dict | None = None) -> tuple[str, str, int]:
     # 与 kapi.run 同一个坑：清空 HTTP(S)_PROXY **不够** ——
     # requests 还会读 Windows 注册表的 ProxyEnable/ProxyServer，
     # 而本机那个系统代理（7890）会破坏 Kaggle 的 TLS 握手
@@ -107,13 +108,25 @@ def _run(cmd: list[str], timeout: int = 300) -> tuple[str, str, int]:
            "HTTP_PROXY": "", "HTTPS_PROXY": "",
            "NO_PROXY": _no_proxy, "no_proxy": _no_proxy,
            "PATH": _new_path}
+    # `extra_env` 让调用方把 OAuth token 之类的东西**只交给这一个子进程**，
+    # 不改本进程环境、不落盘 —— 用于弥合"CLI 认 OAuth、skill 脚本不认"的裂缝。
+    if extra_env:
+        env.update({k: v for k, v in extra_env.items() if v})
     try:
+        # cwd 必须是一个**真实存在**的目录：未安装桥接时 SKILL_ROOT 不存在，
+        # 子进程会以 NotADirectoryError(WinError 267) 直接炸掉 —— 那不是
+        # "桥接缺失"的可读报错，而是看起来像引擎自身崩了。
+        # 退回到本进程的 cwd（调用方已保证那里可写）。
+        _cwd = str(SKILL_ROOT) if SKILL_ROOT.is_dir() else os.getcwd()
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
-                           encoding="utf-8", errors="replace", env=env, cwd=str(SKILL_ROOT))
+                           encoding="utf-8", errors="replace", env=env, cwd=_cwd)
     except FileNotFoundError as e:
         raise SkillError(f"无法执行：{e}") from None
     except subprocess.TimeoutExpired:
         raise SkillError(f"skill 调用超时 {timeout}s：{' '.join(cmd[-3:])}") from None
+    except OSError as e:
+        raise SkillError(f"无法在 {SKILL_ROOT} 下执行 skill（{e}）；"
+                         f"桥接目录是否已安装？{SKILL_ROOT}") from None
     return _UNTRUSTED.sub("", p.stdout or ""), _UNTRUSTED.sub("", p.stderr or ""), p.returncode
 
 
@@ -423,6 +436,124 @@ def submit(sub_file: Path, slug: str, message: str, confirm: bool,
                 f"  direct: {str(direct.get('error'))[:300]}\n" + text)
     return {"confirmed": confirm, "exit": rc, "output": text[-4000:],
             "via": "skill_script"}
+
+
+def leaderboard(slug: str, top: int = 10) -> dict:
+    """排行榜：榜首、自己的名次、奖牌线。
+
+    ## 为什么这个能力值得合并
+
+    `status` 只回答"我交过什么、分数多少"，回答不了**"我这个分数离奖牌还差多少"**。
+    后者是决定"要不要继续迭代"的唯一依据 —— 差 0.0005 值得再跑一轮，
+    差 0.05 不如换个方向。而奖牌线只有排行榜接口给（`medal_lines`）。
+
+    ## 凭据处理与 `status` 同一套
+
+    skill 脚本只认 `KAGGLE_API_TOKEN` / `~/.kaggle/access_token`，
+    **不认 OAuth 的 `~/.kaggle/credentials.json`**。所以先试 CLI 原生路径
+    （`kaggle competitions leaderboard -v`，与 `kaggle` 命令共用凭据），
+    失败再退回 skill 脚本。两套视图不一致时不允许出现"CLI 能用、这里说没凭据"。
+
+    未加入比赛时读不到个人名次（Kaggle 限制），此时仍返回榜首与奖牌线。
+    """
+    from . import kapi
+
+    out: dict = {"slug": slug}
+
+    # ── 1. CLI 原生路径：与 kaggle 命令共用凭据，不会出现两套视图 ──────────
+    cli_err = None
+    try:
+        raw = kapi.run(["competitions", "leaderboard", slug, "-v", "--download"])
+        rows = _parse_leaderboard(raw)
+        if rows:
+            out.update({"source": "kaggle-cli", "rows": rows[:top],
+                        "count": len(rows)})
+    except Exception as e:
+        cli_err = str(e)
+
+    if out.get("rows"):
+        _attach_user_rank(out, slug)
+        return out
+
+    # ── 2. skill 脚本：它额外交回 medal_lines / team_count / 变化历史 ───────
+    script = COMP_SCRIPTS / "competition_leaderboard.py"
+    if not script.exists():
+        raise SkillError("缺 competitions 模块（leaderboard）")
+    token = os.environ.get("KAGGLE_API_TOKEN", "").strip()
+    if not token:
+        # 把 OAuth 的 token 传给 skill 脚本，弥合两套凭据视图。
+        # 只在本进程环境生效，不落盘、不写日志。
+        try:
+            token = (kapi.access_token() or "").strip()
+        except Exception:
+            token = ""
+    env_extra = {"KAGGLE_API_TOKEN": token} if token else None
+    cmd = [sys.executable, str(script), slug, "--top", str(top), "--json"]
+    out_text, err, rc = _run(cmd, timeout=90, extra_env=env_extra)
+    data = _json_tail(out_text)
+    if rc != 0 or data is None:
+        msg = (err or out_text or cli_err or "").strip()
+        if "no Kaggle credential" in msg.lower():
+            raise SkillError(
+                f"读取 {slug} 的排行榜失败：找不到 Kaggle 凭据。\n"
+                f"  · kaggle CLI 用 OAuth（~/.kaggle/credentials.json）\n"
+                f"  · skill 脚本认 KAGGLE_API_TOKEN 或 ~/.kaggle/access_token\n"
+                f"  本函数已尝试把 OAuth token 转交，仍失败说明凭据已失效。\n"
+                f"  处理：执行 `kaggle auth login` 重新登录。")
+        if "403" in msg or "accept its rules" in msg.lower():
+            raise SkillError(
+                f"读取 {slug} 的排行榜失败：规则未接受。\n"
+                f"  打开 https://www.kaggle.com/competitions/{slug}/rules 点接受后再试。")
+        raise SkillError(f"leaderboard {slug} 失败 (exit {rc})\n{msg[:1200]}")
+
+    data.setdefault("slug", slug)
+    data.setdefault("source", "kaggle-skill")
+    return data
+
+
+def _parse_leaderboard(raw: str) -> list[dict]:
+    """解析 `kaggle competitions leaderboard -v` 的 CSV 输出。"""
+    import csv
+    import io
+
+    text = (raw or "").strip()
+    if not text or "<" in text[:60]:
+        return []
+    lines = text.splitlines()
+    header_idx = None
+    for i, ln in enumerate(lines[:8]):
+        if "," in ln and ("Score" in ln or "TeamName" in ln or "Rank" in ln):
+            header_idx = i
+            break
+    if header_idx is None:
+        return []
+    reader = csv.DictReader(io.StringIO("\n".join(lines[header_idx:])))
+    return [{k: (v or "").strip() for k, v in r.items() if k} for r in reader]
+
+
+def _attach_user_rank(out: dict, slug: str) -> None:
+    """CLI 路径没有奖牌线，补上个人名次（能拿到就补，拿不到不报错）。"""
+    from . import kapi
+
+    try:
+        state = kapi.competition_user_state(slug)
+        out["user_rank"] = state.get("userRank") or state.get("user_rank")
+        out["user_has_entered"] = state.get("userHasEntered")
+    except Exception:
+        pass
+    # 奖牌线：公共 API 的 GetLeaderboard 会带 awardsPoints 相关信息
+    try:
+        raw = kapi.site_api(
+            "/api/i/competitions.LeaderboardService/GetLeaderboard"
+            f"?competitionName={slug}&groupId=all&includeGameData=false"
+        )
+        if raw.get("ok"):
+            data = raw.get("data") or {}
+            out["medal_lines"] = data.get("medalLines") or data.get("medal_lines") or {}
+            out["team_count"] = data.get("teamCount") or data.get("totalTeams")
+            out["awards_medals"] = data.get("awardsPoints") or data.get("awardsMedals")
+    except Exception:
+        pass
 
 
 def status(slug: str, limit: int = 5) -> dict:
