@@ -769,8 +769,44 @@ def cmd_write_sub(args) -> int:
 
 
 def cmd_run(args) -> int:
-    """一条命令跑完整条链路，任何一步失败就停在那里并如实打印。"""
+    """一条命令跑完整条链路，任何一步失败就停在那里并如实打印。
+
+    ## 为什么在开头查一次截止
+
+    整条链路里的 iterate 可能占用几十分钟。如果比赛已经结束，
+    这些时间**换不到任何东西** —— 提交会被拒，分数不会有变化。
+
+    所以先查一次：已结束就**直接不进迭代**，仍然把 prepare / baseline /
+    write-sub 跑完。理由不是"省时间"这么简单 —— 基线产物仍然有用：
+    换个比赛或等复赛时可以直接复用特征工程与切分结论；
+    而迭代的产出（选出的最优节点）在比赛结束后毫无价值。
+
+    这也是为什么这里选择"降级继续"而不是"直接退出"：
+    已经下载好的数据、已经验证过的切分、跑通的管线，都是真实的资产。
+    """
     steps: list[dict] = []
+
+    # ── 截止预检（见上方说明）──────────────────────────────────────────────
+    deadline = {"ok": True}
+    try:
+        from .submit import _deadline_gate
+        deadline = _deadline_gate(args.slug)
+    except Exception:
+        deadline = {"ok": True}
+    skip_iterate = False
+    if not deadline.get("ok"):
+        print(f"[kauto] {deadline.get('reason')}", file=sys.stderr)
+        if deadline.get("url"):
+            print(f"[kauto] {deadline['url']}", file=sys.stderr)
+        print("[kauto] 比赛已不接受提交：跳过迭代，仍产出基线版 submission"
+              "（产物可复用于其他比赛）。", file=sys.stderr)
+        skip_iterate = True
+        steps.append({"step": "deadline", "ok": False,
+                      "error": deadline.get("reason"), "fatal": False})
+    elif deadline.get("warning"):
+        print(f"\n   ⚠ {deadline['warning']}\n", file=sys.stderr)
+        steps.append({"step": "deadline", "ok": True,
+                      "warning": deadline.get("warning")})
 
     def step(name, fn):
         print(f"\n=== {name} ===", flush=True)
@@ -792,7 +828,7 @@ def cmd_run(args) -> int:
         base = step("baseline", lambda: model.run_baseline(args.slug, folds=args.folds, seed=args.seed))
         _p(base)
 
-        if args.rounds > 0:
+        if args.rounds > 0 and not skip_iterate:
             try:
                 it = step("iterate", lambda: kiter.iterate(
                     args.slug, rounds=args.rounds, model=args.model,
@@ -813,7 +849,7 @@ def cmd_run(args) -> int:
         # 早期 run 全链路里没有这一步 —— 于是即使 iterate 产出了多方异构候选、
         # blend 能带来真实收益，run 也永远不会用到它（功能存在但没接线）。
         # 融合失败不致命：它被验收门拒绝是正常结果，照样用单模提交。
-        if args.rounds > 0 and not args.no_blend:
+        if args.rounds > 0 and not args.no_blend and not skip_iterate:
             try:
                 b = step("blend", lambda: __import__("kauto.blend", fromlist=["blend"]).blend(
                     args.slug, top_k=args.blend_top_k))

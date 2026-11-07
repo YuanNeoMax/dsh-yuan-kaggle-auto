@@ -2,6 +2,43 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/)；版本语义遵循 [SemVer](https://semver.org/)。
 
+## [Unreleased]
+
+### 新增
+
+- **`kaggle_rules` / `kauto rules`**：读比赛官方页面（评测页、规则页），
+  把其中的硬约束抽成**可执行判据**（行数 / 列数 / 允许列名 / 值域）。
+  写 `write-sub` 前先查，少一次返工。
+- **`kaggle_leaderboard` / `kauto leaderboard`**：榜首、我的名次、奖牌线。
+  这是判断"还值不值得继续迭代"的唯一依据 —— 奖牌线只有排行榜接口给。
+- **面板「查排行」**：填 slug 即查，不需要轮询（一次网络往返，
+  套上轮询反而让面板显得迟钝）。
+- **截止门**：提交前检查比赛是否还收文件。`submissionsDisabled=true` 硬拦；
+  仅截止已过给 warning（有的比赛接受迟到提交）；读不到不拦
+  并提示"查不到 ≠ 已结束"。
+- **`docs/ARCH.md`**：架构与维护指南，含引擎侧改动清单、5 个踩过的坑、
+  "想加东西改哪里"对照表。
+
+### 修复
+
+- **`_run` 在桥接目录不存在时崩溃**：`cwd` 原为硬编码 `SKILL_ROOT`，
+  未安装 skill 时子进程抛 `NotADirectoryError(WinError 267)` ——
+  用户看到的是"引擎崩了"，而不是"这个可选组件没装"。
+- **两条 `validate` 路径判据不一致**：装了桥接与没装桥接会给同一文件
+  不同结论，且桥接路径反而丢了本地几条更强的检查（前导零比对、重复 id、
+  取值分布）。现在本地结构校验始终跑，skill 复核作为补充，任一侧报错都拦。
+- **凭据双视图**：skill 脚本只认 `KAGGLE_API_TOKEN` / `~/.kaggle/access_token`，
+  不认 OAuth 的 `~/.kaggle/credentials.json`，而 CLI 认 OAuth。
+  新增 `_run(extra_env=...)` 把 OAuth token **只交给那一个子进程**
+  （不改本进程环境、不落盘）。
+
+### 测试
+
+- TypeScript **57 项**（新增真实 spawn 的 `runner-integration`，
+  断言 `kauto.__file__` 落在本包内 —— 直指"不会加载别人的引擎"这条性质本身）。
+- 引擎 **69 项**（新增 `test_official_rules`、`test_leaderboard_bridge`、
+  `test_deadline_gate`）。
+
 ## [0.1.0] - 2026-11-08
 
 首次发布。把一个本地 CLI 流水线封装成可安装的 DSH 插件。

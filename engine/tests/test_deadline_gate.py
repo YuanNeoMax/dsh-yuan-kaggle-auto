@@ -115,6 +115,23 @@ try:
 finally:
     kapi.site_api = real_site_api
 
+print("\n=== 8) run 链路：已结束的比赛跳过迭代但保留基线 ===")
+# 这是"别白花几十分钟"的落点。用源码结构断言而不是真跑 run
+# （真跑要下载数据 + 训练，不适合放进快速测试）。
+import re as _re
+
+_src = (Path(__file__).resolve().parent.parent / "kauto" / "cli.py").read_text(encoding="utf-8")
+_run_block = _src[_src.find("def cmd_run("):]
+_run_block = _run_block[:_run_block.find("\ndef ", 1)]
+mark("run 里查了截止", "_deadline_gate" in _run_block)
+mark("已结束时不进迭代", "skip_iterate" in _run_block)
+mark("迭代受 skip_iterate 控制",
+     bool(_re.search(r"if args\.rounds > 0 and not skip_iterate", _run_block)))
+mark("融合同样受控",
+     bool(_re.search(r"not args\.no_blend and not skip_iterate", _run_block)))
+mark("说明为什么保留基线（产物可复用）",
+     "复用" in _run_block or "资产" in _run_block)
+
 print("\n=== 汇总 ===")
 bad = [n for n, ok, _ in results if not ok]
 for n, ok, _ in results:
