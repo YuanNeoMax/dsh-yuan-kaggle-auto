@@ -516,8 +516,42 @@ def prepare(slug: str, valid_frac: float = 0.2, seed: int = 42, local_dir: str |
 
 
 def load_work(slug: str) -> dict:
+    """读 meta.json，并把其中过期的绝对路径修正为**当前**可写根。
+
+    ## 为什么必须修正 `work_dir`
+
+    `prepare` 会把 `work_dir` 写成当时的绝对路径。这个值一旦落盘就固定在
+    文件里，而这带来两个真实问题：
+
+    1. **插件包分发**：`engine/work/<slug>/meta.json` 随 npm 包发布，
+       里面写的是**打包者机器**的路径（`D:\\mumu\\kaggle-auto\\work\\...`）。
+       别人装上后 `work_dir` 指向一个不存在的目录 —— 夹具与回归测试全部失效。
+
+    2. **`KAUTO_ROOT` 重定向**：宿主插件按用户设置注入可写根，测试也会用
+       临时根隔离现场。但 meta 里的旧路径会让 `iterate` / `journal` 等
+       仍然写回**原目录** —— 隔离失效，测试污染真实工作区
+       （本轮实测踩到：用临时根跑一次，真实夹具的 journal 从 5 个节点变成 7 个）。
+
+    判据：只要 meta 里的 `work_dir` 不等于"当前 `KAUTO_ROOT` 下的 work/<slug>"，
+    就以当前根为准。用户在工作区里正常跑出来的路径本来就和该值相等，
+    所以修正是幂等的、对正常使用零影响。
+
+    `data_dir` 同理：相对路径按包根解析；绝对路径且不存在时保持原值，
+    交给调用方报错（不掩盖真实缺失）。
+    """
     work = kapi.WORK_DIR / slug
     meta_path = work / "meta.json"
     if not meta_path.exists():
         raise kapi.KaggleError(f"未准备数据：先跑 prepare（缺 {meta_path}）")
-    return json.loads(meta_path.read_text(encoding="utf-8"))
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+
+    recorded = str(meta.get("work_dir") or "")
+    if recorded and Path(recorded) != work:
+        meta["work_dir"] = str(work)
+        meta["work_dir_relocated_from"] = recorded
+
+    data_dir = str(meta.get("data_dir") or "")
+    if data_dir and not Path(data_dir).is_absolute():
+        meta["data_dir"] = str(kapi.ROOT / data_dir)
+
+    return meta
