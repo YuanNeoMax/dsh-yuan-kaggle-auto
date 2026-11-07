@@ -140,7 +140,26 @@ print(f"   data_dir = {third.get('data_dir')}")
 mark("相对 data_dir 变成绝对路径", Path(str(third.get("data_dir"))).is_absolute())
 mark("且指向包根下", Path(str(third.get("data_dir"))).parts[:2] == TMP.parts[:2] or True)
 
-print("\n=== 6) 缺 meta 时仍报可操作错误 ===")
+print("\n=== 6) work_dir 缺失/为空时不能退化成当前目录 ===")
+# Path("") == "." —— 这是个静默陷阱：调用方会把 journal 写到进程 cwd，
+# 比"写回旧路径"更难排查。所以字段为空时也必须被校正。
+tmp_meta_p = expected / "meta.json"
+for empty_value in ("", None):
+    tmp_meta = json.loads(tmp_meta_p.read_text(encoding="utf-8"))
+    if empty_value is None:
+        tmp_meta.pop("work_dir", None)
+    else:
+        tmp_meta["work_dir"] = empty_value
+    tmp_meta_p.write_text(json.dumps(tmp_meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    got = prep.load_work("demo-comp")
+    shown = f"{empty_value!r}"
+    mark(f"work_dir={shown} 时仍指向当前根",
+         Path(str(got.get("work_dir"))) == expected, str(got.get("work_dir")))
+    mark(f"work_dir={shown} 时不是 '.'", str(got.get("work_dir")) not in (".", ""),
+         str(got.get("work_dir")))
+    mark(f"work_dir={shown} 时不加 relocated 字段",
+         got.get("work_dir_relocated_from") is None)
+print("\n=== 7) 缺 meta 时仍报可操作错误 ===")
 try:
     prep.load_work("no-such-comp")
     mark("缺 meta 时报错", False, "没有抛异常")
@@ -165,3 +184,4 @@ for n, ok, _ in results:
         print(f"  FAIL {n}")
 print("全部通过" if not bad else f"{len(bad)} 项未通过")
 raise SystemExit(1 if bad else 0)
+

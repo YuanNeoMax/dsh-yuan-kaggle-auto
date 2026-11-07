@@ -532,9 +532,10 @@ def load_work(slug: str) -> dict:
        仍然写回**原目录** —— 隔离失效，测试污染真实工作区
        （本轮实测踩到：用临时根跑一次，真实夹具的 journal 从 5 个节点变成 7 个）。
 
-    判据：只要 meta 里的 `work_dir` 不等于"当前 `KAUTO_ROOT` 下的 work/<slug>"，
-    就以当前根为准。用户在工作区里正常跑出来的路径本来就和该值相等，
-    所以修正是幂等的、对正常使用零影响。
+    判据：**无条件**把 `work_dir` 设为"当前 `KAUTO_ROOT` 下的 work/<slug>"。
+    这比"只在不同时才改"更稳：字段缺失或为空时 `Path("")` 会成为 `"."`，
+    调用方（iterate / journal / archive）会写到进程 cwd —— 那个位置比
+    "写回旧路径"更难排查。用户的正常路径本来就等于校正值，所以零影响。
 
     `data_dir` 同理：相对路径按包根解析；绝对路径且不存在时保持原值，
     交给调用方报错（不掩盖真实缺失）。
@@ -546,9 +547,9 @@ def load_work(slug: str) -> dict:
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
 
     recorded = str(meta.get("work_dir") or "")
-    if recorded and Path(recorded) != work:
-        meta["work_dir"] = str(work)
+    if recorded and recorded != str(work):
         meta["work_dir_relocated_from"] = recorded
+    meta["work_dir"] = str(work)
 
     data_dir = str(meta.get("data_dir") or "")
     if data_dir and not Path(data_dir).is_absolute():
