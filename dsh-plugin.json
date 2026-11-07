@@ -1,0 +1,37 @@
+{
+  "$schema": "https://dsh.community/schemas/dsh-plugin-0.15.json",
+  "id": "dsh-yuan-kaggle-auto",
+  "name": "yuan-kaggle-auto",
+  "version": "0.1.0",
+  "manifestVersion": "0.15",
+  "facets": {
+    "host": {
+      "entry": "lib/index.js",
+      "apiVersion": "v1alpha1"
+    }
+  },
+  "requires": {
+    "contracts": [
+      {
+        "apiVersion": "presentation.dsh/v1alpha1",
+        "kind": "OpenExternal",
+        "optional": true,
+        "fallback": "report the URL as text so the user can open it manually"
+      }
+    ]
+  },
+  "permissions": [],
+  "contributes": {
+    "commands": []
+  },
+  "subscriptions": [],
+  "license": "MIT",
+  "source": {
+    "repository": "https://github.com/YuanNeoMax/dsh-yuan-kaggle-auto"
+  },
+  "compat": {
+    "hosts": [
+      "dsh-web"
+    ]
+  }
+}

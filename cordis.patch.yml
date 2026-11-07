@@ -1,0 +1,13 @@
+# dsh-yuan-kaggle-auto 装配层
+#
+# Loader entry id 必须与设置命名空间一致（yuan-kaggle-auto），
+# 且 name 必须等于 package.json 的 name（dsh-yuan-kaggle-auto）。
+# 客户端扫描按最近 manifest 的 name 匹配 Loader specifier，
+# 用别名会让该行被判成"非 client row"，面板会静默消失。
+#
+# 默认配置见 src/config.ts 的 resolveConfig()；这里留空即用全部默认值，
+# 用户改动由设置页写入本 profile 的 patch 层，不会回写这里。
+- insert:
+    - id: yuan-kaggle-auto
+      name: "dsh-yuan-kaggle-auto"
+      config: {}

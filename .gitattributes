@@ -1,0 +1,14 @@
+# 换行统一 LF —— 源码在 Windows 上编辑，但需跨平台一致
+* text=auto eol=lf
+
+# 二进制/不参与 diff
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.tgz binary
+*.zip binary
+
+# Python 源码
+*.py linguist-language=Python
+*.ts linguist-language=TypeScript

@@ -1,0 +1,55 @@
+# ── Node ────────────────────────────────────────────────────────────────────
+node_modules/
+pnpm-lock.yaml
+package-lock.json
+yarn.lock
+*.tgz
+*.tsbuildinfo
+
+# ── 构建产物 ────────────────────────────────────────────────────────────────
+lib/
+
+# ── Python 引擎 ─────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# venv 由插件首次初始化时创建在 <DSH_HOME>/kaggle-auto/venv，
+# 若开发者为了本地调试建在仓库内，同样不入库
+.venv/
+venv/
+ENV/
+
+# 引擎跑测试时的临时产物
+engine/**/data/
+engine/**/work/
+engine/**/reports/
+engine/.pytest_cache/
+
+# ── 测试与工具缓存 ──────────────────────────────────────────────────────────
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ── 本地与临时 ──────────────────────────────────────────────────────────────
+*.tmp
+*.log
+.env
+.env.*
+!.env.example
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# 本地待验证的引擎拷贝（搬运/比对时临时用）
+_local-engine-copy/
