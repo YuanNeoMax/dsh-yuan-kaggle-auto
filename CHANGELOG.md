@@ -58,6 +58,42 @@
   job 路由 404 与增量读取 / cancel 幂等 / **handler 抛异常仍回 JSON**
   （面板没有"路由永不响应"的错误通道）。
 
+- **`pack-contents.test.ts`（9 项）：检查发布物而不是源码树**。
+  既有两条检查都不够：
+
+  - `manifest.test.ts` 只比对 `files` 数组里的**字符串** —— 写了
+    `engine/kauto/*.py` 就算通过，哪怕磁盘上一个 `.py` 都没有；
+  - 我这一轮加的 `every publish pattern actually matches files on disk`
+    又只证明文件在磁盘上存在。
+
+  两者加起来仍然回答不了"用户装到的包里到底有什么"。**实测确认过**：
+  把 `engine/fixtures/**` 从 `files` 里删掉，上面两条**全都还是绿的** ——
+  而 `npm pack` 已经不含夹具，「跑通演练」会在每个全新安装上失败，
+  且只在用户那边失败。
+
+  新测试直接跑 `npm pack --dry-run --json` 读 npm 自己的文件选择结果，
+  断言 tarball 里有：两个 bundle、两个 manifest、≥20 个引擎模块、
+  ≥50 个测试脚本、`run_all_tests.py`、`requirements.lock.txt`、
+  demo-comp 的三个夹具、四份文档；并且**没有** `__pycache__` /
+  `.tmp-*` / `.pyc`、没有带盘符或 `..` 的路径。
+
+  用同样的破坏实验验证过：删掉 fixtures 后这条测试会红，
+  报错直接点名 `train.csv` 缺失。
+
+
+- **`manifest.test.ts` 补 4 项**：每个非通配模式都真的在磁盘上匹配到文件、
+  引擎模块数与三个入口（`cli.py` / `kapi.py` / `prep.py`）、
+  演练夹具三件套、不发布缓存与临时目录。
+
+- **跨平台路径比较**：在 `manifest.test.ts` 里用 `p.endsWith('/cli.py')`
+  判断引擎入口，而 Windows 的 glob 返回反斜杠 —— 这条断言会在 mac 上通过、
+  在这里失败（或反过来）。改为先统一 `\` → `/` 再比较。
+  写测试时自己踩了一遍，说明这类断言确实需要显式处理平台差异。
+
+- **跨平台路径比较**：新测试里用 `p.endsWith('/cli.py')` 判断引擎入口，
+  而 Windows 的 glob 返回反斜杠 —— 这条断言会在 mac 上通过、在这里失败
+  （或反过来）。改为先统一 `\\` → `/` 再比较。写测试时自己踩了一遍，
+  说明这类断言确实需要显式处理平台差异。
 ### 优化
 
 - **排行榜缓存**：实测单次 **15.7 秒**（跨网往返 + 快照落盘），而面板上
