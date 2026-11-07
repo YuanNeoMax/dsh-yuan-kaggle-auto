@@ -53,3 +53,6 @@ Thumbs.db
 
 # 本地待验证的引擎拷贝（搬运/比对时临时用）
 _local-engine-copy/
+
+# 集成测试的临时 runtime root
+.tmp-runner-test/

@@ -167,14 +167,25 @@ kaggle_submit { slug, confirm }        tools.ts: submitGate()
 
 ```bash
 pnpm typecheck        # tsc 两种配置都不许报错
-pnpm test             # vitest 43 项
-pnpm test:engine      # 引擎 66 项（含 SKIP）
+pnpm test             # vitest 54 项（含真实 spawn 的集成测试）
+pnpm test:engine      # 引擎 68 项（含 SKIP）
 pnpm build            # lib/index.js + lib/client.js
 pnpm smoke            # 真引擎跑 doctor + list --format json
 ```
 
 面板改动另外要人工确认：**无 emoji、只用两档字重、颜色全走语义变量、
 一个包围盒、状态行三列网格**。
+
+### 关于集成测试
+
+`tests/runner-integration.test.ts` 会**真的 spawn Python**。它存在的理由：
+`runner-parse.test.ts` 能证明解析器正确，但证明不了 argv、环境约定、cwd
+是对的 —— 而那三样正好是历史上出过问题的地方（cwd 落进别的 checkout、
+`KAUTO_ROOT` 指错层级）。解析器测试抓不到这类错。
+
+没有装依赖的解释器时它 **skip 而不是 fail**（一个没建 venv 的 checkout 是正常
+状态，不是回归）。它还会直接断言 `kauto.__file__` 落在本包的 `engine/` 内 ——
+这是"不会加载别人的引擎"这条性质本身，而不是它的间接迹象。
 
 ## 9. 与 kaggle-skill 的关系
 
