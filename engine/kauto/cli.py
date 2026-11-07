@@ -194,25 +194,53 @@ def cmd_solutions(args) -> int:
 
 
 def cmd_validate(args) -> int:
+    """形状校验 + 官方评测页约束。
+
+    ## 为什么改成「始终本地校验，skill 只作为额外一层」
+
+    旧实现二选一：桥接可用就跑 skill 的 `validate`，否则跑 `_validate_local`。
+    实测暴露出两个问题：
+
+    1. **两条路径的判据不一致**。skill 的 validate 读官方格式要求，
+       而 `_validate_local` 只查列名/行数/id —— 同一个文件在装了桥接和
+       没装桥接的机器上可能给出不同结论，这本身就是缺陷。
+    2. **桥接可用时反而丢了本地那几条更强的检查**（id 与 sample 的前导零
+       比对、重复 id、取值分布），那些是实测踩出来的。
+
+    现在统一为：**本地结构校验始终跑**（`_validate_local`，含官方规则第二层），
+    skill 的 validate 结果作为补充输出附在后面。两边都通过才算通过 ——
+    任何一侧报错都拦住，因为提交配额不可回收。
+    """
     sub = kapi.WORK_DIR / args.slug / "submission.csv"
     if not sub.exists():
         print(f"缺 {sub}，先跑 write-sub")
         return 1
+
+    local_rc = _validate_local(args.slug)
+
     sample = kapi.WORK_DIR / args.slug / "sample_submission.csv"
     r, why = skillbridge.try_or_none(
         skillbridge.validate, sub, sample if sample.exists() else None, args.slug
     )
     if r is None:
-        # 形状校验**不依赖 skill**：subcheck 就是引擎自带的同一套检查。
-        # 插件包里没有 vendor 是常态，这条必须能用。
-        print(f"[kauto] skill 桥接不可用，改用内置形状校验。{why}")
-        return _validate_local(args.slug)
+        if why:
+            print(f"\n  INFO  skill 桥接校验未执行：{why}")
+        return local_rc
+
+    print("\n  ── skill 桥接校验（官方格式复核）──")
     print(r["output"])
-    return 0 if r["passed"] else 3
+    bridge_rc = 0 if r["passed"] else 3
+    if bridge_rc != 0 and local_rc == 0:
+        print("\n  本地校验通过，但 skill 复核未通过 —— 以更严格的一侧为准。")
+    return local_rc if local_rc != 0 else bridge_rc
 
 
 def _validate_local(slug: str) -> int:
-    """内置形状校验（不依赖 skill 桥接）。"""
+    """内置形状校验（不依赖 skill 桥接的结构层）。
+
+    若 skill 桥接可用，会额外读**官方评测页**并把其中的硬约束作为第二层判据。
+    读不到评测页时退回纯结构校验 —— 官方页不可用不该阻断本地检查。
+    """
     import pandas as pd
 
     from . import subcheck as _subcheck
@@ -234,7 +262,35 @@ def _validate_local(slug: str) -> int:
         meta = _prep.load_work(slug)
     except Exception:
         pass
-    result = _subcheck.check(out, sample, meta.get("id_col") or "", test)
+
+    # ── 官方评测页 → 可执行判据 ────────────────────────────────────────────
+    rules = None
+    rules_note = ""
+    try:
+        bridge_ok = skillbridge.available()["vendored"]
+    except Exception:
+        bridge_ok = False
+    if bridge_ok:
+        try:
+            ev = skillbridge.evaluation_page(slug)
+            extracted = skillbridge.rules_from_evaluation(ev.get("text", ""))
+            if extracted:
+                rules = extracted
+                rules_note = (f"官方评测页抽出 {len(extracted)} 条约束"
+                              f"（{ev.get('chars', 0)} 字"
+                              f"{'，缓存命中' if ev.get('cached') else ''}）")
+            elif ev.get("text"):
+                rules_note = f"评测页已读取（{ev.get('chars', 0)} 字）但未抽到可执行约束"
+            else:
+                rules_note = f"评测页不可用：{ev.get('error', '未知')}"
+        except Exception as e:
+            rules_note = f"评测页读取失败：{str(e)[:120]}"
+    else:
+        rules_note = "skill 桥接未安装，仅做结构校验（官方约束未检查）"
+    if rules_note:
+        print(f"  INFO  {rules_note}")
+
+    result = _subcheck.check(out, sample, meta.get("id_col") or "", test, rules=rules)
     ok = True
     for name, passed, detail in _iter_checks(result):
         mark = "PASS" if passed else ("SKIP" if passed is None else "FAIL")
@@ -262,6 +318,56 @@ def _iter_checks(result: dict):
         yield name, True, ""
     for problem in problems:
         yield str(problem)[:90], False, ""
+
+
+def cmd_rules(args) -> int:
+    """读取官方页面，导出**可执行**的提交判据。
+
+    这是给 model 和面板都能用的入口：它不说"去读评测页"，
+    而是把页面里的硬约束变成结构化字段（rows / columns / allowed_columns / range），
+    并且把原文一并回传，供人核对抽取是否正确。
+
+    为什么需要它：`validate` 是**事后**检查；而这个命令让 agent 在写
+    `write-sub` 之前就知道"这份文件必须长什么样"，少一次返工。
+    公开页面不需要凭据。
+    """
+    import json as _json
+
+    page = getattr(args, "page", "evaluation") or "evaluation"
+    data, why = skillbridge.try_or_none(skillbridge.pages, args.slug, page)
+    if data is None:
+        _p({"ok": False, "slug": args.slug, "page": page,
+            "error": why or "无法读取官方页面",
+            "hint": "官方页面读取需要 kaggle-skill 桥接（可选）。"
+                    "未安装时仍可用 validate 的结构校验，但官方格式约束无从检查。"})
+        return 2
+
+    pages_list = data.get("pages") or []
+    text = ""
+    for item in pages_list:
+        if str(item.get("name", "")).lower() in (page.lower(), f"{page.lower()} page"):
+            text = item.get("text") or ""
+            break
+    if not text and pages_list:
+        text = pages_list[0].get("text") or ""
+
+    extracted = skillbridge.rules_from_evaluation(text)
+    payload = {
+        "ok": True,
+        "slug": args.slug,
+        "page": page,
+        "chars": len(text),
+        "official_rules": extracted,
+        "executable": sorted(extracted.keys()),
+        "note": ("这些判据会被 validate 自动应用；抽不出来就只做结构校验"
+                 if extracted else "未从该页抽到可执行约束（结构校验仍然有效）"),
+    }
+    if getattr(args, "format", "json") == "text":
+        if text:
+            print(text)
+        return 0
+    _p(payload)
+    return 0
 
 
 def cmd_status(args) -> int:
@@ -779,6 +885,13 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("validate", help="用 skill 校验 submission 形状")
     p.add_argument("slug")
     p.set_defaults(fn=cmd_validate)
+
+    p = sub.add_parser("rules", help="读取官方页面并导出可执行的提交判据")
+    p.add_argument("slug")
+    p.add_argument("--page", default="evaluation",
+                   help="页面名（默认 evaluation；也可 rules / data-description）")
+    p.add_argument("--format", choices=("text", "json"), default="json")
+    p.set_defaults(fn=cmd_rules)
 
     p = sub.add_parser("status", help="自己的排名/剩余提交次数（需凭据）")
     p.add_argument("slug")

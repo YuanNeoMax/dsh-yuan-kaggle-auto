@@ -451,6 +451,29 @@ export function registerTools(reg: Reg, deps: ToolDeps): void {
   })
 
   make({
+    name: 'kaggle_rules',
+    description:
+      '读取比赛的官方页面（默认评测页）并把其中的硬约束变成可执行判据：行数、列数、允许的列名、取值范围。写提交文件前先查它，能少一次返工。公开页面不需要凭据。',
+    parameters: {
+      slug: slugParam.slug,
+      page: {
+        type: 'string',
+        description: "Page name: 'evaluation' (default) | 'rules' | 'data-description'.",
+      },
+      text: {
+        type: 'boolean',
+        description: 'Also return the page text itself (default false).',
+      },
+    },
+    run: async (args) => {
+      const argv = ['rules', String(args.slug ?? '')]
+      if (typeof args.page === 'string' && args.page.trim()) argv.push('--page', args.page.trim())
+      if (args.text === true) argv.push('--format', 'text')
+      return invoke(deps, argv)
+    },
+  })
+
+  make({
     name: 'kaggle_validate',
     description: '形状校验：列名、行数、id 是否与 sample_submission 完全一致。不评分，但能挡住会白烧配额的错文件。',
     parameters: { slug: slugParam.slug },
@@ -694,7 +717,7 @@ export function helpPayload(topic: string): ToolResult {
       'kaggle_doctor / kaggle_setup / kaggle_connect',
       'kaggle_list / kaggle_info / kaggle_status',
       'kaggle_prepare / kaggle_baseline / kaggle_iterate',
-      'kaggle_write_sub / kaggle_validate / kaggle_submit / kaggle_receipt',
+      'kaggle_write_sub / kaggle_rules / kaggle_validate / kaggle_submit / kaggle_receipt',
       'kaggle_run / kaggle_help',
     ],
     advanced: [

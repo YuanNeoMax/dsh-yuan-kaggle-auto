@@ -113,6 +113,7 @@ PROBE = [
     "test_entered_state.py",
     "test_upload_channel.py",
     "test_write_sub_id.py",
+    "test_official_rules.py",
 ]
 
 # 只把这些当作真失败信号。

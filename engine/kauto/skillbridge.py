@@ -140,6 +140,131 @@ def brief(slug: str) -> dict:
     return data
 
 
+def pages(slug: str, page: str = "", timeout: int = 60) -> dict:
+    """比赛的官方页面正文（rules / evaluation / data-description …）。
+
+    ## 这个能力为什么重要
+
+    `subcheck` 只能校验"列名对不对、行数对不对"——它读不到**官方评测页**。
+    而评测页常常写着本地校验覆盖不到的硬约束，例如 titanic 的：
+
+        "You should submit a csv file with exactly 418 entries plus a header row.
+         Your submission will show an error if you have extra columns
+         (beyond PassengerId and Survived) or rows."
+
+    这些规则一旦违反，提交会被判废**且照样消耗当日配额**（kaggle-skill 的
+    platform notes 里明确记录了"出错的提交也可能占用配额"）。所以能在本地
+    读到评测页原文，就能把"会不会浪费一次配额"从猜测变成可判定。
+
+    公开页面**不需要凭据**（实测 titanic 的 evaluation 页可直接拉取）。
+    """
+    cmd = [sys.executable, str(SKILL_ENTRY), "pages", slug, "--json"]
+    if page:
+        cmd += ["--page", page]
+    out, err, rc = _run(cmd, timeout=timeout)
+    data = _json_tail(out)
+    if rc != 0 or data is None:
+        raise SkillError(f"pages {slug} 失败 (exit {rc})\n{(err or out).strip()[:900]}")
+    return data
+
+
+def evaluation_page(slug: str, timeout: int = 60) -> dict:
+    """评测页正文，带缓存。迭代与提交前都会用到它，同一场比赛不会变。
+
+    返回 {text, chars, fetched_at, cached}。取不到时返回 {text: "", error}，
+    **不抛异常** —— 官方页面读不到不该阻断建模流程（本地校验仍然有效）。
+    """
+    import time as _t
+
+    cache_p = SKILL_ROOT.parent / "cache" / f"evaluation_{slug}.json" if SKILL_ROOT.is_dir() else None
+    if cache_p is None:
+        # 未安装桥接时没有缓存目录可写，直接用内存级结果
+        cache_p = None
+
+    if cache_p is not None and cache_p.exists():
+        try:
+            c = json.loads(cache_p.read_text(encoding="utf-8"))
+            if _t.time() - float(c.get("fetched_at", 0)) < CACHE_TTL and c.get("text"):
+                c["cached"] = True
+                return c
+        except Exception:
+            pass
+
+    try:
+        data = pages(slug, "evaluation", timeout=timeout)
+    except Exception as e:
+        return {"text": "", "chars": 0, "error": str(e)[:300]}
+
+    entry = {"text": "", "chars": 0, "fetched_at": _t.time(), "cached": False}
+    for item in (data.get("pages") or []):
+        name = str(item.get("name", "")).lower()
+        if name in ("evaluation", "evaluation page"):
+            entry["text"] = item.get("text") or ""
+            entry["chars"] = len(entry["text"])
+            break
+    if not entry["text"]:
+        entry["error"] = "评测页为空或名称不匹配"
+
+    if cache_p is not None and entry["text"]:
+        try:
+            cache_p.parent.mkdir(parents=True, exist_ok=True)
+            cache_p.write_text(json.dumps(entry, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
+    return entry
+
+
+# ── 官方规则 → 本地可执行判据 ────────────────────────────────────────────────
+#
+# 评测页是自然语言，但真正会导致提交被判废的约束几乎都是少数几个固定形态：
+# "exactly N entries / rows"、"exactly N columns"、"beyond <col1> and <col2>"
+# 、"column names"、"sorted"、"between a and b"（值域）。
+#
+# 这里不追求读懂整页，只把这几类抽成结构化判据，交给 `subcheck` 做额外检查。
+# 抽不出来就什么都不加 —— 宁可少查，不可误判。
+_RULE_PATTERNS = [
+    # exactly 418 entries / rows
+    (re.compile(r"exactly\s+(\d+)\s+(?:entries|rows|data rows)", re.I), "rows"),
+    # exactly 2 columns
+    (re.compile(r"exactly\s+(\d+)\s+columns?", re.I), "columns"),
+    # "beyond PassengerId and Survived"
+    (re.compile(r"beyond\s+([A-Za-z0-9_,\s]+?)(?:\)|\.|$)", re.I), "allowed_columns"),
+    # values between 0 and 1
+    (re.compile(r"(?:values?|predictions?|scores?)\s+(?:must be|should be|are)?\s*"
+                r"between\s+(-?\d+(?:\.\d+)?)\s+and\s+(-?\d+(?:\.\d+)?)", re.I), "range"),
+]
+
+
+def rules_from_evaluation(text: str) -> dict:
+    """把评测页的自然语言约束抽成可执行判据。
+
+    返回 {rows, columns, allowed_columns, range}，缺哪项就不含哪项。
+    调用方（subcheck）只做它拿到的检查。
+    """
+    if not text:
+        return {}
+    found: dict = {}
+    for pattern, kind in _RULE_PATTERNS:
+        match = pattern.search(text)
+        if not match:
+            continue
+        if kind == "rows":
+            found["rows"] = int(match.group(1))
+        elif kind == "columns":
+            found["columns"] = int(match.group(1))
+        elif kind == "allowed_columns":
+            names = re.split(r"[,\s]+and\s+|[,\s]+", match.group(1).strip())
+            cleaned = [n.strip(" ,.") for n in names if n.strip(" ,.")]
+            # 只保留像列名的（字母开头、无空格）
+            cleaned = [n for n in cleaned if n[:1].isalpha() and " " not in n]
+            if cleaned:
+                found["allowed_columns"] = cleaned
+        elif kind == "range":
+            found["range"] = [float(match.group(1)), float(match.group(2))]
+    return found
+
+
+
 def solutions(slug: str, top: int = 10, preview: bool = True,
               fallback: bool = False, timeout: int = 90,
               refresh: bool = False) -> list[dict]:

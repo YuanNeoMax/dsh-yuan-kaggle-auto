@@ -2,6 +2,22 @@
 
 宁可在这里报错，也不要交上去一个"行数表头都对、数值全错"的文件——
 Kaggle 的提交次数是最贵的东西，一次废提交换不回来。
+
+## 两层判据
+
+**第一层（本地结构）**：列名、行数、id 对齐、重复 id、空值、取值分布。
+这些不需要任何外部信息，永远可跑。
+
+**第二层（官方规则）**：从比赛**评测页原文**抽出来的硬约束
+（`rules` 参数）。评测页常写本地看不出来的东西，例如 titanic 的
+"exactly 418 entries plus a header row … error if you have extra columns"。
+
+这一层为什么值得加：kaggle-skill 的 platform notes 明确记录
+**一次报错的提交照样占用当日配额**。所以能提前读到官方约束，
+就把"会不会白烧一次"从猜测变成可判定。
+
+`rules` 缺省为 None（未读评测页）时行为与以前完全一致 ——
+新增能力不能改变既有调用路径的结果。
 """
 from __future__ import annotations
 
@@ -14,7 +30,8 @@ class SubmissionInvalid(RuntimeError):
 
 
 def check(out: pd.DataFrame, sample: pd.DataFrame | None, id_col: str,
-          test: pd.DataFrame, min_classes: int = 2) -> dict:
+          test: pd.DataFrame, min_classes: int = 2,
+          rules: dict | None = None) -> dict:
     problems: list[str] = []
 
     if sample is not None:
@@ -102,6 +119,51 @@ def check(out: pd.DataFrame, sample: pd.DataFrame | None, id_col: str,
     if problems:
         raise SubmissionInvalid("submission 自检失败：" + "；".join(problems))
 
+    # ── 第二层：官方评测页的硬约束 ─────────────────────────────────────────
+    #
+    # 放在第一层之后：结构问题（列名/行数/id）是更根本的错，先报它们；
+    # 官方规则在这一层再补"结构对了但违反官方口径"的漏网情形。
+    official: list[str] = []
+    applied: dict = {}
+    if rules:
+        want_rows = rules.get("rows")
+        if isinstance(want_rows, int) and want_rows != len(out):
+            official.append(
+                f"评测页要求恰好 {want_rows} 行，实际 {len(out)} 行")
+
+        want_cols = rules.get("columns")
+        if isinstance(want_cols, int) and want_cols != len(out.columns):
+            official.append(
+                f"评测页要求恰好 {want_cols} 列，实际 {len(out.columns)} 列（{list(out.columns)}）")
+
+        allowed = rules.get("allowed_columns")
+        if isinstance(allowed, list) and allowed:
+            extra = [c for c in out.columns if str(c) not in {str(a) for a in allowed}]
+            if extra:
+                official.append(
+                    f"评测页点名只允许 {allowed}，多出了 {extra}")
+
+        rng = rules.get("range")
+        if isinstance(rng, list) and len(rng) == 2:
+            lo, hi = float(rng[0]), float(rng[1])
+            val_cols_present = [c for c in out.columns if c not in
+                                {id_col, sample.columns[0] if sample is not None else id_col}]
+            if val_cols_present:
+                v = pd.to_numeric(out[val_cols_present[0]], errors="coerce")
+                arr = v.to_numpy(dtype=float)
+                finite = arr[np.isfinite(arr)]
+                if finite.size and (finite.min() < lo or finite.max() > hi):
+                    official.append(
+                        f"评测页要求取值在 [{lo}, {hi}]，实际 "
+                        f"[{float(finite.min()):.4g}, {float(finite.max()):.4g}]")
+        applied = {k: rules[k] for k in ("rows", "columns", "allowed_columns", "range")
+                   if k in rules}
+
+    if official:
+        raise SubmissionInvalid(
+            "submission 违反官方评测页约束：" + "；".join(official))
+
     return {"rows": int(len(out)), "columns": [str(c) for c in out.columns],
             "n_unique_values": int(n_unique),
-            "prediction_kind": "numeric" if is_numeric_col else "label"}
+            "prediction_kind": "numeric" if is_numeric_col else "label",
+            "official_rules_applied": applied}
