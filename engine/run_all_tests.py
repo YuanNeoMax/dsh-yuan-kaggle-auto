@@ -117,6 +117,7 @@ PROBE = [
     "test_leaderboard_bridge.py",
     "test_deadline_gate.py",
     "test_llm_provider.py",
+    "test_docs_sync.py",
 ]
 
 # 只把这些当作真失败信号。
@@ -181,4 +182,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
 

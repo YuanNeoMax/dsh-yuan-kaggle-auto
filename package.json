@@ -1,6 +1,6 @@
 {
   "name": "dsh-yuan-kaggle-auto",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "DSH 插件：把 Kaggle 竞赛全流程（下载 / 切分 / 基线 / LLM 特征工程迭代 / 融合 / 校验 / 提交 / 读榜分）交给 AI 全自动完成。内置 Python 引擎，首装一键初始化，附带可选的 ego 浏览器一键安装。",
   "type": "module",
   "author": "YuanNeo",

@@ -2,7 +2,7 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/)；版本语义遵循 [SemVer](https://semver.org/)。
 
-## [Unreleased]
+## [0.2.0] - 2026-11-08
 
 ### 新增
 
@@ -84,3 +84,4 @@
 
 - TypeScript：43 项（配置容错、提交门、输出解析、作业板、路由守卫、安装规格）。
 - Python：66 项全绿（其中 4 项因插件包不带用户工作区产物而正确 SKIP）。
+
