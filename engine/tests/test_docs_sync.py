@@ -90,14 +90,18 @@ if arch:
                 "work_dir", "leaderboard", "smoke", "缓存", "deadline"):
         mark(f"ARCH 记录 {key}", key in arch)
 
-print("\n=== 7) ARCH.md 记录了最贵的教训（两类静默失败）===")
+print("\n=== 7) ARCH.md 记录了最贵的教训（四类静默失败）===")
 if arch:
     # 这几轮修掉的缺陷大多同类，不写下来下一个人会重犯。
     mark("有静默失败章节", "静默失败" in arch)
     for key in ("rounds.requested", "cached_age_seconds", "work_dir_relocated_from"):
         mark(f"ARCH 举了 {key} 作例子", key in arch)
-    # 两类里"少暴露"那一半只能静态核对，得点出对应测试
-    mark("指出只能静态核对的那一半", "test_tool_cli_parity" in arch)
+    # 四类失效机制必须都在：认错了类，就会用错检测方法。
+    for kind in ("配置读不到", "返回值少说了什么", "一套信息两套视图", "环境差异"):
+        mark(f"ARCH 记录失效机制：{kind}", kind in arch)
+    # 每类的检测手段都要点名，否则清单只是"知道有坑"而非"知道怎么查"。
+    for detector in ("test_tool_cli_parity", "install-shape", "shell-quoting", "pack-contents"):
+        mark(f"ARCH 指出检测手段：{detector}", detector in arch)
 
 print("\n=== 8) ARCH.md 记录了新增的坑 ===")
 if arch:

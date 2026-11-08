@@ -2,7 +2,7 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/)；版本语义遵循 [SemVer](https://semver.org/)。
 
-## [Unreleased]
+## [0.3.0] - 2026-11-08
 
 ### 修复
 
@@ -83,6 +83,16 @@
   修法：Windows 上**总是**显式给出 `--proxy`（有值用它，无值给空串）。
   `--proxy` 能覆盖注册表里的 `ProxyEnable`/`ProxyServer`，而环境变量不能 ——
   这正是本机 TLS 失败的根因。
+
+- **版本库里躺着真实比赛数据**：`engine/titanic.zip`（353 KB）被跟踪了好几轮，
+  是某次跑真实比赛时 `prepare` 留下的下载产物，被 `git add -A` 一并提交。
+
+  后果不只是仓库变大：**许可**（Kaggle 数据集各有自己的许可，随代码再分发
+  通常不允许）、**体积**（真实比赛数据动辄几百 MB，进历史后只能靠
+  filter-branch 清理）、**误导**（后来的人会以为这是夹具）。
+
+  已从索引与工作区移除，并在 `.gitignore` 里挡住 `engine/*.zip` 与
+  `engine/*.csv`（夹具在 `engine/fixtures/` 下，不受影响）。
 
 ### 测试
 
@@ -333,6 +343,19 @@
   真 import `lib/index.js` —— `engineDirectory` 解析到包内 `engine/`，
   `engineSourcesPresent()` 返回 `true`。
 
+- **`repo-hygiene.test.ts`（7 项）：版本库里不该有运行产物**。
+  检查 `git ls-files` 的实际输出，而不是 glob 磁盘 —— 只有前者能回答
+  "有没有进库"。
+
+  覆盖：`engine/` 根下无 zip / 无裸 csv（`prepare` 的落点）、
+  `engine/work` 与 `engine/data` 下无任何文件、无 `__pycache__` / `.pyc`、
+  **反面保护**（合成夹具必须仍被跟踪，否则离线演练会失去数据）、
+  以及 `.gitignore` 里确实有那两条规则（光删现有文件不够，
+  下一轮跑真实比赛又会生成）。
+
+- **一次破坏实验**：造一个 `engine/digit-recognizer.zip` 强行 `git add -f`，
+  测试红并精确点名 `tracked downloads: engine/digit-recognizer.zip`。
+
 ### 文档
 
 - **`docs/ARCH.md` 补齐到当前代码状态**：引擎侧改动清单从 6 处补到 **11 处**
@@ -425,6 +448,22 @@
   - 把 `deps` 的 `warn` 改成恒 `ok` → 1 项红；
   - 把 `ready` 从「venv + 新鲜 stamp + lightgbm + kaggle CLI」简化成
     「venv 存在」→ **2 项红**。
+
+- **`docs/ARCH.md` 的「两类静默失败」升级为四类失效机制**。
+  十八轮积累的案例按"错在哪一环"重新归组，每组配自己的检测手段：
+
+  | 类 | 特征 | 检测手段 |
+  |---|---|---|
+  | A 配置读不到 | 界面给了旋钮，代码没接线 | 静态核对两侧契约 |
+  | B 返回值少说了什么 | 做了，但没说清 | 断言返回值含那条信息 |
+  | C 一套信息两套视图 | 同一事实两处说法不同 | 强制走同一个源 |
+  | D 环境差异 | 开发机上永远是对的 | 在真实形态下跑 |
+
+  结尾加了一条元教训：**A 和 B 靠加断言就能防住，C 要改结构，D 要改测试环境**。
+  十八轮里做错最多的是把 D 当成 A 去查 —— 在仓库里反复看代码，
+  而答案只在换一个环境跑一次时才出现。
+
+- `test_docs_sync.py` 相应扩到检查四类机制名与四个检测手段的测试名。
 
 ### 优化
 
