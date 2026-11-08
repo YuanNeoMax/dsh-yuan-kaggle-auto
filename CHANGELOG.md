@@ -66,7 +66,51 @@
   静默错误。** 上一轮我为 `EINVAL` 加了 `shell: true` 并验证了
   "`pnpm.cmd --version` 能跑" —— 但没验证带 semver range 的参数。
 
+- **Windows 下配了「上传代理」却没传给 pip**：`pipArgs` 的原逻辑是
+  「Windows 且**没配**代理 → 加 `--proxy ''`」，配了代理就什么都不加。
+
+  实测确认：
+
+  ```
+  win32  proxy=(none)                 -> --proxy: [""]
+  win32  proxy="http://127.0.0.1:7890" -> --proxy: []        ← 配置被忽略
+  ```
+
+  后果：用户填了代理，pip 仍走那个会破坏 PyPI TLS 的**系统代理** ——
+  与没填代理得到相同结果，而错误信息完全指向 PyPI 或网络。
+  用户会以为"代理没配好"，实际是代码没读它。
+
+  修法：Windows 上**总是**显式给出 `--proxy`（有值用它，无值给空串）。
+  `--proxy` 能覆盖注册表里的 `ProxyEnable`/`ProxyServer`，而环境变量不能 ——
+  这正是本机 TLS 失败的根因。
+
 ### 测试
+
+- **`install-engine.test.ts`（13 项）：`installEngine` 此前零覆盖**。
+  它是唯一会创建 venv、跑 pip 的路径，最慢（几分钟）且失败场景最多，
+  而用户看到的只有"初始化失败"。
+
+  覆盖：无解释器时提前失败并带安装指引、**失败时点名是哪一步**
+  （而不是笼统的"安装失败"）、stamp 命中时**完全不 spawn**（"秒回"的全部实现）、
+  `force` 真的绕过 fast-path、lock 文件变化时复用 venv 但重装依赖、
+  pip 失败时把真实报错放进 `tail`、**pip 成功但导入失败**（wheel 平台不匹配，
+  最容易被误判成"装好了"）、步骤顺序与面板可渲染性。
+
+- **`pipArgs` 的 5 条单测**：Windows 总是带 flag、配了代理就用它（本轮修复）、
+  POSIX 仅在配置时加、总是从 lock 文件安装、非交互（一次卡在
+  `Do you want to continue?` 的 pip 看起来像死机）。
+
+- **两次有效破坏实验**：
+  - 回退 pip 代理逻辑 → 1 项红；
+  - 把 fast-path 简化成「只要 venv 存在」→ **5 项红**。
+
+- **一次无效的破坏实验，值得记**：第一次破坏只把条件里的一行
+  （`stamp.pythonVersion === ...`）换成 `true`，其余四个条件仍在，
+  于是 13 项全绿。我一度以为测试无效 —— 实际是**破坏不够彻底**。
+  改成把整个条件换成 `if (venvUsable)` 后立刻 5 项红。
+
+  教训：破坏实验要破坏**整条判断**，而不是其中一行。否则会得出
+  "测试没用"的错误结论。
 
 - **`shell-quoting.test.ts`（11 项）**：8 条单测逐字符覆盖 `quoteForCmd`
   （普通 token 不加引号、caret/comparator/全部 cmd 元字符/空格/内嵌引号/

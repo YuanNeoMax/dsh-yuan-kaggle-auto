@@ -49,14 +49,33 @@ function requirementsHash(paths: ResolvedPaths): string {
   return createHash('sha256').update(readFileSync(file, 'utf8')).digest('hex').slice(0, 16)
 }
 
-/** pip on Windows needs an explicit proxy reset when `` blocked PyPI before. */
-function pipArgs(paths: ResolvedPaths, settings: Settings): string[] {
+/**
+ * pip 的代理参数。
+ *
+ * ## Windows 上必须**总是**显式给出 `--proxy`
+ *
+ * 实测：本机系统代理会让 pip 到 PyPI 的 TLS 握手失败。清空
+ * `HTTP_PROXY`/`HTTPS_PROXY` **不够** —— pip 还会读 Windows 注册表里的
+ * `ProxyEnable`/`ProxyServer`，只有命令行 `--proxy` 能覆盖它。
+ *
+ * 原实现在 Windows 上只在**没配代理**时才给 `--proxy ''`，配了代理就
+ * 什么都不加 —— 于是那个配置被静默忽略，pip 继续用会坏 TLS 的系统代理。
+ * 用户填了代理反而得到和没填一样的结果，而错误信息完全指向 PyPI 或网络。
+ *
+ * 现在两种情形都显式给出：
+ *   · 配了 → 用用户配的那个（它同时绕开注册表里的系统代理）
+ *   · 没配 → `--proxy ''`（明确禁用，等价于"直连"）
+ *
+ * 非 Windows 保持原样：`HTTP_PROXY` 环境变量在那里是有效的，无需硬加参数。
+ */
+export function pipArgs(paths: ResolvedPaths, settings: Settings): string[] {
   const args = ['-m', 'pip', 'install', '--disable-pip-version-check', '--no-input']
   if (isWindows()) {
-    // Measured on this machine: a system proxy makes pip fail its TLS handshake
-    // to PyPI. An empty --proxy is the root fix; it overrides the registry value,
-    // which HTTP_PROXY/HTTPS_PROXY alone do not.
-    if (!settings.uploadProxy.trim()) args.push('--proxy', '')
+    const proxy = settings.uploadProxy.trim()
+    // Always pass the flag on Windows: it overrides the registry proxy, which
+    // env vars do not. An empty value means "no proxy", which is the fix for
+    // the TLS failure; a real value lets the user route pip through theirs.
+    args.push('--proxy', proxy || '')
   } else if (settings.uploadProxy.trim()) {
     args.push('--proxy', settings.uploadProxy.trim())
   }
