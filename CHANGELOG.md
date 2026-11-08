@@ -26,6 +26,25 @@
   10 次的模型，会基于它从未收集过的证据下结论。现在返回 `rounds.requested` /
   `rounds.effective` 与一句点名两个数字的 `roundsNote`，并说明怎么调高上限。
   新增 `planRounds()` 统一处理（`run` 允许 0 轮 = 只跑基线，`iterate` 最小 1 轮）。
+- **一键安装 ego 在 Windows 上 100% 失败**：`runStreaming` 用
+  `spawn('pnpm.cmd', ...)`，而 Windows 上 `.cmd` shim 不能直接 spawn ——
+  实测 `spawn('pnpm.cmd', ['--version'])` 抛 `EINVAL`，且异常在进程启动前
+  同步抛出，`Promise` 里的 try/catch 拦不住它，表现为整个调用崩掉。
+
+  这意味着一键安装 ego（本插件唯一会改动用户 profile 的功能）
+  **在 Windows 上从未成功过**，而在其他平台看起来一切正常。
+
+  修法：Windows 且命令以 `.cmd` / `.bat` 结尾时加 `shell: true`，
+  与用户在终端里敲命令走同一条路径。
+
+- **回滚不清理 pnpm 装进 node_modules 的包**：undo 栈原先只登记
+  `package.json` 的内容。`pnpm add` 是第一步，它成功后目录已经落在
+  `node_modules/` 里；如果写 manifest 那步失败，回滚只恢复清单 ——
+  于是**清单说"没装"、文件却躺在磁盘上**，用户下次安装会看到半装状态。
+
+  修法：pnpm 成功后给 undo 栈登记删除，但**只在"装之前不存在"时登记** ——
+  删掉用户本来就有的包是更严重的破坏。两个方向各有一条测试。
+
 ### 文档
 
 - **`docs/ARCH.md` 补齐到当前代码状态**：引擎侧改动清单从 6 处补到 **11 处**

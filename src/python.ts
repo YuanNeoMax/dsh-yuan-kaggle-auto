@@ -216,12 +216,23 @@ export function runStreaming(
     }
     let child
     try {
+      // On Windows, `.cmd` / `.bat` shims (pnpm.cmd, npm.cmd) cannot be spawned
+      // directly — Node raises EINVAL before the process starts, and the error
+      // arrives synchronously so a naive try/catch around `spawn` inside a
+      // Promise still surfaces as an uncaught throw. `shell: true` routes them
+      // through cmd.exe, which is what a user's terminal does too.
+      //
+      // Measured: `spawn('pnpm.cmd', ['--version'])` on Windows 22 → EINVAL.
+      // Without this, the one-click ego install failed 100% of the time on
+      // Windows while appearing to work everywhere else.
+      const needsShell = process.platform === 'win32' && /\.(cmd|bat)$/i.test(command)
       child = spawn(command, args, {
         cwd: options.cwd,
         env: options.env,
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
         signal: options.signal,
+        ...(needsShell ? { shell: true } : {}),
       })
     } catch (error) {
       resolve({ code: null, signal: null, output: `spawn failed: ${error instanceof Error ? error.message : String(error)}` })

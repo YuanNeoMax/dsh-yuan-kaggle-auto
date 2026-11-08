@@ -19,7 +19,7 @@
  * Everything is reversible: the recorded undo list runs in reverse, so a failure
  * halfway through leaves the profile exactly as it was.
  */
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { runStreaming } from './python.ts'
 import { dshHome } from './paths.ts'
@@ -148,6 +148,10 @@ export async function installCompanion(
   // ── pnpm add ─────────────────────────────────────────────────────────────
   const pnpm = platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
   const target = range ? `${specName}@${range}` : request.spec.trim()
+  // Remember whether the package was already on disk BEFORE pnpm ran. Rolling
+  // back a freshly created directory is safe; removing a pre-existing one would
+  // delete something the user already had.
+  const installedBefore = existsSync(installedDir)
   const added = await runStreaming(pnpm, ['add', target, '--save-exact'], {
     cwd: dir,
     onLine: emit,
@@ -168,6 +172,19 @@ export async function installCompanion(
       error: 'pnpm 安装失败（可能是网络、代理或包名不存在）',
       tail: tailOf(added.output),
     }
+  }
+  // pnpm succeeded, so `node_modules/<pkg>` now exists. If a later step fails,
+  // restoring only `package.json` would leave an orphaned package on disk —
+  // the manifest would say the plugin is not installed while its files are.
+  // Register the removal so rollback undoes the whole operation, not half of it.
+  if (!installedBefore) {
+    undo.push(() => {
+      try {
+        rmSync(installedDir, { recursive: true, force: true })
+      } catch {
+        // A locked file must not mask the original failure.
+      }
+    })
   }
 
   // ── manifest: register the bundle so a restart keeps it ──────────────────
