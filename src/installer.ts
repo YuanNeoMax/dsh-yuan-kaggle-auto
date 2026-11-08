@@ -201,7 +201,18 @@ export async function installCompanion(
       },
     }
     writeManifest(dir, next, undo)
-    steps.push({ step: 'manifest', ok: true, detail: `${packageName} 写入 dependencies` })
+    // 文案要说清这一步**实际做了什么**：`dependencies` 由 pnpm 写，
+    // 这里只补 `dsh.profile.bundles`。原先写的是"写入 dependencies"，
+    // 与行为不符 —— 若 pnpm 因 `--no-save` 或版本差异没写进去，
+    // 用户会以为这一步已经保证过。
+    const declared = current.dependencies?.[packageName]
+    steps.push({
+      step: 'manifest',
+      ok: true,
+      detail: declared
+        ? `${packageName} 已在 dependencies（${declared}）`
+        : `${packageName} 未出现在 dependencies —— pnpm 没有记录它，请检查 pnpm 版本`,
+    })
     steps.push({ step: 'bundles', ok: true, detail: `${packageName} 加入 dsh.profile.bundles` })
   } catch (error) {
     rollback(undo)

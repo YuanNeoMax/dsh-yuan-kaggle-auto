@@ -84,6 +84,49 @@
 
 - 破坏实验：移除元字符检测（永不加引号）→ **6 项红**。
 
+- **`installCompanion` 的步骤文案与实际行为不符**：写 manifest 那一步报告
+  "写入 dependencies"，但 `dependencies` 是 **pnpm** 写的，这一步只补
+  `dsh.profile.bundles`。若 pnpm 因 `--no-save` 或版本差异没有记录依赖，
+  用户会以为这一步已经保证过。
+
+  改为如实报告两种情形：`已在 dependencies（0.9.7）` 或
+  `未出现在 dependencies —— pnpm 没有记录它，请检查 pnpm 版本`。
+
+  这类"文案比行为承诺得更多"的缺陷，与前几轮修的"轮数静默夹紧"、
+  "描述差 7.5 倍"是同一类：**不会报错，只是让人形成错误预期**。
+
+- **`installer-success.test.ts`（7 项）：`installCompanion` 的成功路径**。
+  上一轮只覆盖了回滚；这一轮补主干。
+
+  重点断言 **`loader.create` 的入参**，因为它是"免重启生效"的唯一机制，
+  而 `id` / `name` 传错会产生两种静默后果：
+
+  - `name` 错 → Loader 用错的 specifier 去 require，插件加载不出来，
+    但安装步骤里 `load.ok` 仍是 true；
+  - `id` 错 → 设置面板的命名空间对不上，面板静默消失。
+
+  覆盖的分支：
+
+  - 完整成功：清单写入、bundles 追加、`loader.create` 收到正确的
+    `id` / `name`；
+  - 步骤顺序是承诺：`pnpm` < `manifest` < `load`，最后一步是 `verify`；
+  - 宿主没有 loader → 仍然成功，但明确说"重启后生效"；
+  - `loader.create` 抛异常 → 仍然成功（文件与清单已就位），
+    说明里带上原始错误并提示重启；
+  - 版本号取自 `node_modules` 里实际落地的包，而不是请求的 range；
+  - 一切就绪时不调用 pnpm（避免无谓地动用户的 lockfile）；
+  - `entryId` 与 `packageName` 是两个不同标识，不能混用。
+
+- **两次破坏实验**：
+  - 把 `loader.create` 的 `id` / `name` 互换 → **2 项红**；
+  - 移除 `verify` 步骤 → **2 项红**。
+
+- **一次桩不真实导致的假失败**：第一版 pnpm 桩只创建了
+  `node_modules/<pkg>`，没写 `dependencies`，于是断言失败。查证真实 pnpm
+  行为（`pnpm add is-number --save-exact` 之后清单里出现
+  `"dependencies":{"is-number":"7.0.0"}`）后修正桩 —— 那不是产品缺陷，
+  是桩没有覆盖被测代码依赖的那部分契约。
+
 ### 文档
 
 - **`docs/ARCH.md` 补齐到当前代码状态**：引擎侧改动清单从 6 处补到 **11 处**
