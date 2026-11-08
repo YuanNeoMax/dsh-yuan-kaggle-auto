@@ -41,6 +41,9 @@ describe('quoteForCmd', () => {
 
   it('quotes comparator ranges', () => {
     // `>` 在 cmd 里是重定向；不加引号整段参数会消失。
+    // 这不是理论：跑这组测试时它在仓库根目录真的生成了一个名为 `1.0.0`
+    // 的文件，内容是 `pkg@` —— cmd 把 `>=1.0.0` 当成了重定向目标。
+    // 那条命令之所以能生成文件，正说明不加引号时参数确实被 cmd 接管了。
     expect(quoteForCmd('pkg@>=1.0.0')).toBe('"pkg@>=1.0.0"')
     expect(quoteForCmd('pkg@<=2.0.0')).toBe('"pkg@<=2.0.0"')
   })

@@ -56,3 +56,6 @@ _local-engine-copy/
 
 # 集成测试的临时 runtime root
 .tmp-runner-test/
+
+# 测试 spawn 时 cmd 重定向偶发产物（见 tests/shell-quoting.test.ts）
+/1.0.0
