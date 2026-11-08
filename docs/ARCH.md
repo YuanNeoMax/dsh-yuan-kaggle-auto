@@ -257,6 +257,30 @@ pnpm smoke            # 真引擎跑 doctor + list --format json
 状态，不是回归）。它还会直接断言 `kauto.__file__` 落在本包的 `engine/` 内 ——
 这是"不会加载别人的引擎"这条性质本身，而不是它的间接迹象。
 
+### 关于安装形态
+
+开发机上永远看不到的一类问题：**装成 npm 包之后路径还对吗**。
+
+`PACKAGE_ROOT` 由 `lib/index.js` 的位置推导（`dirname(import.meta.url)/..`）。
+在仓库里它指向 checkout 根，`engine/` 就在旁边；装上之后它指向
+`node_modules/dsh-yuan-kaggle-auto/`，而 `engine/` 也必须在那里 ——
+否则 25 个工具全部找不到引擎，报出的还是"未初始化"这种指向错误方向的提示。
+
+`tests/install-shape.test.ts` 真实 `npm pack` → 解压 → 断言
+`lib/index.js` 与 `engine/` 相邻、`engineDirectory` 落在包内、运行时必需文件齐全。
+它不联网、不装依赖，只验证路径推导与文件布局。
+
+两条必须一起看：
+
+| 测试 | 回答的问题 |
+|---|---|
+| `pack-contents.test.ts` | 包里**有没有**这些文件 |
+| `install-shape.test.ts` | 包里的文件**摆在对的位置**吗 |
+
+第二个才是路径推导的前提。`main` 改成 `./index.js`、`engine/` 被挪进 `lib/`、
+或 `files` 漏掉 `engine/kauto/*.py` —— 三种都会让推导指错一层，
+而只有第二个测试抓得到。
+
 ## 9. 与 kaggle-skill 的关系
 
 `shepsci/kaggle-skill` 提供了 13 个比赛脚本与 20 篇参考资料，其中有几项能力

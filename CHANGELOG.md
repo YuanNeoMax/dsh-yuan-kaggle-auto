@@ -296,6 +296,43 @@
   - 移除 `requirementsHash` 校验 → **2 项红**；
   - 去掉坏 JSON 的 `catch` → **1 项红**。
 
+- **`install-shape.test.ts`（7 项）：安装形态下的路径推导**。
+  这是本项目唯一一个「只在安装后才成立、在开发机上永远看不到」的假设：
+
+  ```ts
+  PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+  ```
+
+  在仓库里它指向 checkout 根，`engine/` 就在旁边；装上后指向
+  `node_modules/dsh-yuan-kaggle-auto/`，而 `engine/` 也必须在那里 ——
+  否则 25 个工具全部找不到引擎，报出的还是"未初始化"这种**指向错误方向**
+  的提示。
+
+  前 17 轮全部验证都在仓库内完成，库内测试无法回答这个问题。现在真实
+  `npm pack` → 解压 → 断言：`lib/index.js` 与 `engine/` 相邻、
+  `engineDirectory` 落在包内、`cli.py` 存在、六个运行时必需文件齐全、
+  `engine/` **没有**被塞进 `lib/`、`main` 指向 `./lib/index.js`。
+
+- **与 `pack-contents.test.ts` 的分工**：
+
+  | 测试 | 回答的问题 |
+  |---|---|
+  | `pack-contents` | 包里**有没有**这些文件 |
+  | `install-shape` | 包里的文件**摆在对的位置**吗 |
+
+  第二个才是路径推导的前提。`main` 改错、`engine/` 挪进 `lib/`、
+  `files` 漏掉 `engine/kauto/*.py` —— 三种都会让推导指错一层，
+  而只有第二个测试抓得到。
+
+- **两次破坏实验**：
+  - 从 `files` 去掉 `engine/kauto/*.py` → **3 项红**，报错点名
+    `missing: engine/kauto/cli.py`；
+  - `main` 改成 `./index.js` → 1 项红，报错 `expected './index.js' to be './lib/index.js'`。
+
+- **真实安装形态手工验证**：把 tgz 解压到临时目录、链接四个 peer 依赖、
+  真 import `lib/index.js` —— `engineDirectory` 解析到包内 `engine/`，
+  `engineSourcesPresent()` 返回 `true`。
+
 ### 文档
 
 - **`docs/ARCH.md` 补齐到当前代码状态**：引擎侧改动清单从 6 处补到 **11 处**
