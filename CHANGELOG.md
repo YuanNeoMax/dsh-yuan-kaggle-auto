@@ -233,6 +233,40 @@
 - **导出两个此前不可测的内部函数**：`invoke`、`createLock`。
   它们是全部工具的底座与并发保证，理应可测。
 
+- **`python-candidates.test.ts`（9 项）：解释器候选顺序是一份契约**。
+  四个来源的先后决定"用户填的设置到底算不算数"，任何一处排错位置，
+  表现都是"我配了但没生效"，而用户无法自己诊断。
+
+  | 顺序 | 来源 | 排错位置的后果 |
+  |---|---|---|
+  | 1 | 显式 `pythonPath` | 填了也没用，因为 venv 已在 |
+  | 2 | `KAUTO_PYTHON` | CI / 调试用的覆盖失效 |
+  | 3 | 插件自己的 venv | 用上 PATH 的裸 python，baseline 阶段炸 `ModuleNotFoundError` |
+  | 4 | PATH 兜底 | — |
+
+  覆盖：显式设置优先、env 次之且先于 venv、**venv 先于任何 PATH 候选**
+  （只有 venv 里装了 pandas/lightgbm）、venv 不存在时不浪费时间探测、
+  空串不产生"命令名为空"的候选、Windows 上 `py -3` 优先且只在 Windows、
+  `python3` 恒先于 `python`（部分发行版上 `python` 是 2.x 别名）、
+  `venvPython` / `venvKaggle` 的 Scripts 与 bin 布局差异、
+  `MIN_PYTHON` 是 3.10（引擎用了 PEP 604 注解）。
+
+- **两次破坏实验**：
+  - 把 venv 排到 PATH 之后 → **2 项红**；
+  - 忽略用户的 `pythonPath` → **1 项红**。
+
+- **三次自身错误，逐个修正后才绿**：
+  1. `venvPython` 从 `python.ts` 导入 —— 它实际定义在 `paths.ts`，
+     `python.ts` 只内部引用、没有 re-export。从错的地方导入不报错，
+     只在调用时得到 `is not a function`（已经是运行时）；
+  2. `root` 写成模块级常量而 `afterEach` 会删它 —— 第二个用例起就在
+     往已删除目录写文件，表现为"创建成功但 `existsSync` 为假"；
+  3. `makeVenv` 按当前平台（win32）写 `Scripts/python.exe`，
+     而断言按 `'linux'` 查 `bin/python` —— 必须让两者用同一个 `platform`。
+
+  第 3 条本身说明了被测函数的一个真实约束：`pythonCandidates` 的
+  `platform` 参数同时控制 venv 路径拼接与 PATH 候选，调用方必须一致地传。
+
 ### 文档
 
 - **`docs/ARCH.md` 补齐到当前代码状态**：引擎侧改动清单从 6 处补到 **11 处**
