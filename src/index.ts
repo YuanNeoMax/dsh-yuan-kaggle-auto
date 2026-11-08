@@ -53,7 +53,7 @@ interface RouteResponse {
 }
 
 /** Serialise per-key so two calls do not write the same work/<slug> tree. */
-function createLock(): (key: string) => Promise<() => void> {
+export function createLock(): (key: string) => Promise<() => void> {
   const chains = new Map<string, Promise<void>>()
   return async (key: string) => {
     const previous = chains.get(key) ?? Promise.resolve()

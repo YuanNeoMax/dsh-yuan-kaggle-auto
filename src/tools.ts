@@ -95,7 +95,7 @@ export function fromRun(run: RunResult, extra: Record<string, unknown> = {}): To
   }
 }
 
-interface InvokeOptions {
+export interface InvokeOptions {
   /** Lock key; defaults to the slug when one is present. */
   lock?: string
   /** Ceiling in ms; 0 disables (iterate can legitimately run long). */
@@ -111,7 +111,7 @@ interface InvokeOptions {
  * other's `best_*` artifacts. Different slugs run concurrently, which is what
  * lets one agent babysit two competitions.
  */
-async function invoke(
+export async function invoke(
   deps: ToolDeps,
   command: string[],
   options: InvokeOptions = {},
