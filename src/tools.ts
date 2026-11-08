@@ -50,19 +50,45 @@ function result(payload: ToolResult): ToolResult {
   return payload
 }
 
-/** Uniform translation of a failed engine run into a tool result. */
-function fromRun(run: RunResult, extra: Record<string, unknown> = {}): ToolResult {
+/**
+ * Uniform translation of an engine run into a tool result.
+ *
+ * ## 失败时也必须保留结构化输出
+ *
+ * 引擎在失败路径上**同样**打印 JSON —— `kauto run` 即使某一步失败，
+ * 也会输出 `{"steps": [...]}`，其中每一步都带 `ok` / `error`。
+ * 实测（用一个不存在的 slug 跑 `run`）：
+ *
+ *     {"steps": [{"step": "prepare", "ok": false,
+ *                 "error": "这场比赛的规则还没接受…"}]}
+ *
+ * 早先这里在 `ok: false` 时只截 stderr 尾部，把整个 JSON 丢掉了。
+ * 后果是模型看一段人读的文本，拿不到"哪一步失败、失败原因是什么"这个
+ * 唯一的可分支信息 —— 而这正是它决定下一步该做什么的依据。
+ *
+ * 现在两种结局都先展开引擎返回的对象，再叠加错误字段。
+ * `error` 用引擎的 `run.error`（它已经从 stderr 提炼过），
+ * 但若引擎给了结构化 steps，就不必让模型去解析自由文本。
+ */
+export function fromRun(run: RunResult, extra: Record<string, unknown> = {}): ToolResult {
   const value = run.value
+  const structured =
+    value !== null && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : undefined
+
   if (run.ok) {
-    if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
-      return { ok: true, ...(value as Record<string, unknown>), ...extra }
-    }
+    if (structured) return { ok: true, ...structured, ...extra }
     return { ok: true, stdout: run.stdout.trim() || undefined, value: value === undefined ? undefined : value, ...extra }
   }
+
   return {
     ok: false,
     error: run.error ?? 'engine 调用失败',
     exitCode: run.exitCode,
+    // Engine-provided structure wins over raw text: `steps` says which stage
+    // failed, `stderr` only says something broke.
+    ...(structured ?? {}),
     stderr: run.stderr.trim().slice(0, 1200) || undefined,
     stdout: run.stdout.trim().slice(-400) || undefined,
     ...extra,
