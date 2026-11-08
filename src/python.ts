@@ -185,6 +185,33 @@ export interface SpawnLine {
 }
 
 /**
+ * Quote one argument so cmd.exe passes it through untouched.
+ *
+ * ## 为什么必须做这件事
+ *
+ * `shell: true` 把整个命令行交给 cmd.exe，于是**每个参数都要重新经历
+ * cmd 的解析**。而 cmd 会把 `^` 当转义符、把 `>` `<` `|` 当重定向/管道。
+ *
+ * 实测（`cmd /c echo <arg>`）：
+ *
+ *     dsh-ego-browser@^0.9  →  dsh-ego-browser@0.9     （^ 被吃掉）
+ *     pkg@>=1.0.0           →  （空）                    （> 被当成重定向）
+ *
+ * 本插件的默认 `egoVersion` 正是 `^0.9` —— 不引号就会**装错版本还报成功**。
+ *
+ * 规则：用双引号包起来，内部的 `"` 转义成 `\"`。
+ * 双引号在 cmd 里足以挡住 `^ & | < >` 这些元字符。
+ * 空参数给一对空引号，否则会被折叠掉。
+ */
+export function quoteForCmd(arg: string): string {
+  if (arg === '') return '""'
+  const escaped = arg.replace(/"/g, '\\"')
+  // 不含元字符时不加引号，保持命令可读（也避免 pnpm 收到字面引号）。
+  if (!/[\s"^&|<>()]/.test(escaped)) return escaped
+  return `"${escaped}"`
+}
+
+/**
  * A tiny promise-wrapped spawn that streams lines.
  *
  * Deliberately not execa: this must run with the *user's* interpreter and may
@@ -225,8 +252,22 @@ export function runStreaming(
       // Measured: `spawn('pnpm.cmd', ['--version'])` on Windows 22 → EINVAL.
       // Without this, the one-click ego install failed 100% of the time on
       // Windows while appearing to work everywhere else.
+      //
+      // ## But shell mode re-parses every argument
+      //
+      // cmd.exe treats `^` as an escape character and `>` as redirection, so an
+      // unquoted semver range is silently mangled. Measured through `cmd /c`:
+      //
+      //   dsh-ego-browser@^0.9   →  dsh-ego-browser@0.9    (caret eaten)
+      //   pkg@>=1.0.0            →  <empty>                (redirection!)
+      //
+      // The default `egoVersion` is `^0.9`, so shell mode without quoting would
+      // install the *wrong version* and report success. Each argument is quoted
+      // before handing the command line to cmd; `\"` inside double quotes keeps
+      // cmd's own parsing from breaking on embedded spaces.
       const needsShell = process.platform === 'win32' && /\.(cmd|bat)$/i.test(command)
-      child = spawn(command, args, {
+      const spawnArgs = needsShell ? args.map(quoteForCmd) : args
+      child = spawn(command, spawnArgs, {
         cwd: options.cwd,
         env: options.env,
         stdio: ['ignore', 'pipe', 'pipe'],

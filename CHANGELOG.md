@@ -45,6 +45,45 @@
   修法：pnpm 成功后给 undo 栈登记删除，但**只在"装之前不存在"时登记** ——
   删掉用户本来就有的包是更严重的破坏。两个方向各有一条测试。
 
+- **上一轮的 `shell: true` 修复引入静默装错版本**：`shell: true` 让
+  `.cmd` shim 可执行，但也让 **cmd.exe 重新解析每个参数**。cmd 把 `^` 当
+  转义符、`>` 当重定向，实测：
+
+  ```
+  cmd /c echo dsh-ego-browser@^0.9   →  dsh-ego-browser@0.9    （^ 被吃掉）
+  cmd /c echo pkg@>=1.0.0            →  （空）                  （> 当成重定向）
+  ```
+
+  而本插件默认 `egoVersion` **就是** `^0.9`。所以上一轮"修好"的一键安装
+  实际会装一个不存在的 `0.9` 版本，**并且报成功**。
+
+  这比"装不上"更糟：装不上用户会重试，装错版本用户不会知道。
+
+  修法：shell 分支下逐参数引号化（`quoteForCmd`），内部 `"` 转义为 `\"`，
+  空参数给 `""` 防止被折叠。
+
+  这一条值得单独记：**修一个平台的兼容问题，可能给同一平台的另一处引入
+  静默错误。** 上一轮我为 `EINVAL` 加了 `shell: true` 并验证了
+  "`pnpm.cmd --version` 能跑" —— 但没验证带 semver range 的参数。
+
+### 测试
+
+- **`shell-quoting.test.ts`（11 项）**：8 条单测逐字符覆盖 `quoteForCmd`
+  （普通 token 不加引号、caret/comparator/全部 cmd 元字符/空格/内嵌引号/
+  空参数/Windows 带空格路径），2 条真实 spawn 覆盖 shell 分支
+  （`pnpm.cmd --version` 证明 EINVAL 回归不再出现）。
+
+- **两次断言修正，都因为原版"能因错误的原因通过"**：
+  - 第一版用 `pnpm add ... --dry-run`，而 `--dry-run` 不是 `pnpm add` 的选项，
+    命令在选项解析阶段就失败 —— spec 从未出现在输出里，`if (includes(spec))`
+    于是假通过；
+  - 第二版用 `pnpm add <spec>`，失败时 pnpm 的错误信息也不回显 spec。
+
+  最终把端到端断言收敛到"shell 分支不崩"，逐字符行为交给单测 ——
+  这让测试从 17 秒降到 0.5 秒，且不再依赖网络。
+
+- 破坏实验：移除元字符检测（永不加引号）→ **6 项红**。
+
 ### 文档
 
 - **`docs/ARCH.md` 补齐到当前代码状态**：引擎侧改动清单从 6 处补到 **11 处**
@@ -64,8 +103,6 @@
 - **`test_docs_sync.py` 从 10 项扩到 20 项**：检查 ARCH.md 是否记录了
   全部 11 处引擎改动、"两类静默失败"章节及其三个例子、以及三个新增的坑。
   文档落后于代码正是这个测试要抓的东西 —— 这一轮它抓到自己的清单只记到 6 处。
-
-### 测试
 
 - **`routes-behaviour.test.ts`（16 项）**：`registerRoutes` 此前从未被调用过，
   `routes-guard.test.ts` 只覆盖 `isTrustedRequest` / `readBody` 两个纯函数。
