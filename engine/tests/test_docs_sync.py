@@ -78,6 +78,22 @@ changelog = CHANGELOG.read_text(encoding="utf-8") if CHANGELOG.exists() else ""
 for feature in ("kaggle_rules", "kaggle_leaderboard"):
     mark(f"CHANGELOG 记录 {feature}", feature in changelog)
 
+print("\n=== 5.1) README 写明仓库卫生约定 ===")
+readme = README.read_text(encoding="utf-8") if README.exists() else ""
+if readme:
+    # 真实比赛数据进过库一次（engine/titanic.zip），根因是没人写下"不许"。
+    # 现在写进 README，并由 tests/repo-hygiene.test.ts 执行。
+    mark("写明真实数据不入库", "真实比赛数据不进版本库" in readme)
+    mark("点名夹具可以入库", "fixtures" in readme)
+    mark("提到 repo-hygiene 测试", "repo-hygiene" in readme)
+    mark("写明运行产物不入库", "运行产物不入库" in readme)
+    # 测试项数写错会误导：读到"66 项"的人会以为新加的测试没生效。
+    import re as _re
+    m = _re.search(r"pnpm test:engine\s+#\s*引擎 Python 回归（(\d+) 项）", readme)
+    mark("README 写明引擎测试项数", m is not None, m.group(1) if m else "未找到")
+    m2 = _re.search(r"pnpm test\s+#\s*vitest（TS 层，(\d+) 项）", readme)
+    mark("README 写明 TS 测试项数", m2 is not None, m2.group(1) if m2 else "未找到")
+
 print("\n=== 6) ARCH.md 记录了引擎侧改动清单 ===")
 arch = ARCH.read_text(encoding="utf-8") if ARCH.exists() else ""
 mark("ARCH.md 存在", bool(arch))

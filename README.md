@@ -180,8 +180,8 @@ AI 内部会调 `kaggle_run`，它按
 ```bash
 pnpm install
 pnpm typecheck        # tsc
-pnpm test             # vitest（TS 层）
-pnpm test:engine      # 引擎 66 项 Python 回归
+pnpm test             # vitest（TS 层，231 项）
+pnpm test:engine      # 引擎 Python 回归（76 项）
 pnpm build            # lib/index.js + lib/client.js
 pnpm smoke            # 用真实引擎跑 doctor + list
 ```
@@ -189,6 +189,32 @@ pnpm smoke            # 用真实引擎跑 doctor + list
 `engine/` 是随包分发的 Python 源码；`lib/` 是构建产物。
 `pnpm test:engine` 会自动找一个**装了依赖**的解释器（venv 优先），
 找不到就提示先初始化。
+
+### 仓库卫生
+
+两件事必须守住，`tests/repo-hygiene.test.ts` 会检查：
+
+**真实比赛数据不进版本库。** `kauto prepare` 会把 Kaggle 下载的 zip 落在
+`engine/` 根下，跑真实比赛时这些文件就出现在工作区里，
+一次 `git add -A` 就会提交。这不只是仓库变大 —— 数据集各有自己的许可，
+随代码再分发通常不允许；真实比赛数据动辄几百 MB，进历史后只能靠
+filter-branch 清理；后来的人也容易把它当成夹具引用。
+
+`.gitignore` 已挡住 `engine/*.zip` 与 `engine/*.csv`。
+`engine/fixtures/` 里的是**合成**夹具，可以入库 —— 离线演练依赖它们。
+
+**运行产物不入库。** `engine/work/` 与 `engine/data/` 的内容随每次运行变化，
+已在 `.gitignore` 里整目录排除。
+
+### 提交前
+
+```bash
+pnpm typecheck && pnpm test && pnpm test:engine && pnpm build
+```
+
+四项全过再提交。其中 `pnpm test` 里的 `install-shape.test.ts` 与
+`pack-contents.test.ts` 会真的 `npm pack`，它们验证的是**装成包之后**
+还对不对 —— 那是仓库内测试看着全绿、用户装上就坏的那类问题的唯一防线。
 
 ## 致谢与许可
 
